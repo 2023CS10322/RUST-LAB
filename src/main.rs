@@ -13,7 +13,7 @@ use std::time::Duration;
 static mut CHECK: bool = false;
 
 // Converts a 0-indexed column number into its corresponding letter string.
-fn col_to_letters(mut col: i32) -> String {
+fn col_to_letters(mut col: u16) -> String {
     let mut buf = Vec::new();
     loop {
         buf.push(((col % 26) as u8 + b'A') as char);
@@ -27,7 +27,7 @@ fn col_to_letters(mut col: i32) -> String {
 }
 
 // Clamps vertical viewport.
-fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
+fn clamp_viewport_ve(total_rows: u16, start_row: &mut u16) {
     if *start_row > total_rows {
         *start_row -= 10;
     } else if *start_row > (total_rows - 10) {
@@ -38,7 +38,7 @@ fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
 }
 
 // Clamps horizontal viewport.
-fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
+fn clamp_viewport_hz(total_cols: u16, start_col: &mut u16) {
     if *start_col > total_cols {
         *start_col -= 10;
     } else if *start_col > (total_cols - 10) {
@@ -85,7 +85,7 @@ fn display_grid(sheet: &Spreadsheet) {
 }
 
 // Displays grid from a specified start.
-fn display_grid_from(sheet: &Spreadsheet, start_row: i32, start_col: i32) {
+fn display_grid_from(sheet: &Spreadsheet, start_row: u16, start_col: u16) {
     // Calculate max displayable rows/columns
     let mut max_col = start_col + 10;
     if max_col > sheet.total_cols {
@@ -196,8 +196,8 @@ fn main() {
         eprintln!("Usage: {} <rows> <cols>", args[0]);
         return;
     }
-    let rows: i32 = args[1].parse().unwrap_or(0);
-    let cols: i32 = args[2].parse().unwrap_or(0);
+    let rows: u16 = args[1].parse().unwrap_or(0);
+    let cols: u16 = args[2].parse().unwrap_or(0);
     if rows < 1 || cols < 1 {
         eprintln!("Invalid dimensions.");
         return;
