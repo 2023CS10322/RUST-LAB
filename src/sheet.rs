@@ -10,33 +10,33 @@ pub struct Cell {
     pub value: i32,
     pub formula: Option<String>,
     pub status: CellStatus,
-    pub dependencies: HashSet<(i32, i32)>,  // (row, col) indices
-    pub dependents: HashSet<(i32, i32)>,
-    pub row: i32,
-    pub col: i32,
+    pub dependencies: HashSet<(u16, u16)>,  // (row, col) indices
+    pub dependents: HashSet<(u16, u16)>,
+    pub row: u16,
+    pub col: u16,
 }
 
 #[derive(Clone)]
 pub struct CachedRange {
     pub value: i32,
-    pub dependencies: HashSet<(i32, i32)>,
+    pub dependencies: HashSet<(u16, u16)>,
 }
 
 pub struct Spreadsheet {
-    pub total_rows: i32,
-    pub total_cols: i32,
+    pub total_rows: u16,
+    pub total_cols: u16,
     pub cells: Vec<Vec<Cell>>,
-    pub top_row: i32,
-    pub left_col: i32,
+    pub top_row: u16,
+    pub left_col: u16,
     pub output_enabled: bool,
     pub skip_default_display: bool,
     pub cache: HashMap<String, CachedRange>,  // Cached range evaluations
-    pub dirty_cells: HashSet<(i32, i32)>,     // Track cells needing recalculation
-    pub in_degree: HashMap<(i32, i32), usize>, // For topological sort
+    pub dirty_cells: HashSet<(u16, u16)>,     // Track cells needing recalculation
+    pub in_degree: HashMap<(u16, u16), usize>, // For topological sort
 }
 
 impl Spreadsheet {
-    pub fn new(rows: i32, cols: i32) -> Box<Spreadsheet> {
+    pub fn new(rows: u16, cols: u16) -> Box<Spreadsheet> {
         let mut cells = Vec::with_capacity(rows as usize);
         for r in 0..rows {
             let mut row_cells = Vec::with_capacity(cols as usize);
@@ -69,7 +69,7 @@ impl Spreadsheet {
     }
 
     // Update cell formula (rewritten to use HashSets)
-    pub fn update_cell_formula(&mut self, row: i32, col: i32, formula: &str, status_msg: &mut String) {
+    pub fn update_cell_formula(&mut self, row: u16, col: u16, formula: &str, status_msg: &mut String) {
         if valid_formula(self, formula, status_msg) != 0 {
             status_msg.clear();
             status_msg.push_str("Unrecognized");
@@ -147,7 +147,7 @@ impl Spreadsheet {
         }
 
         // Mark this cell as dirty for recalculation
-        self.dirty_cells.remove(&(row, col)); 
+        self.dirty_cells.insert((row, col));
 
         // Evaluate the formula
         let mut error_flag = 0;
@@ -196,12 +196,12 @@ impl Spreadsheet {
 }
 
 // Utility: converts cell name (e.g. "A1") to (row, col).
-pub fn cell_name_to_coords(name: &str) -> Option<(i32, i32)> {
+pub fn cell_name_to_coords(name: &str) -> Option<(u16, u16)> {
     let mut pos = 0;
     let mut col_val = 0;
     for ch in name.chars() {
         if ch.is_alphabetic() {
-            col_val = col_val * 26 + (ch.to_ascii_uppercase() as i32 - 'A' as i32 + 1);
+            col_val = col_val * 26 + (ch.to_ascii_uppercase() as u16 - 'A' as u16 + 1);
             pos += 1;
         } else {
             break;
@@ -212,7 +212,7 @@ pub fn cell_name_to_coords(name: &str) -> Option<(i32, i32)> {
     let mut row_val = 0;
     for ch in name[pos..].chars() {
         if ch.is_digit(10) {
-            row_val = row_val * 10 + (ch as i32 - '0' as i32);
+            row_val = row_val * 10 + (ch as u16 - '0' as u16);
         } else {
             return None;
         }
@@ -227,7 +227,7 @@ pub fn trim(s: &mut String) {
 }
 
 // Validates a formula.
-pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String) -> i32 {
+pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String) -> u16 {
     status_msg.clear();
     let len = formula.len();
     if len == 0 {
@@ -241,7 +241,7 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
         }
         return 0;
     }
-    if formula.trim().parse::<i32>().is_ok() {
+    if formula.trim().parse::<u16>().is_ok() {
         return 0;
     }
     if formula.starts_with("MAX(") || formula.starts_with("MIN(") ||
@@ -299,7 +299,7 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
         }
         let inner = &formula[6..formula.len()-1];
         let mut inner = inner.trim().to_string();
-        if inner.parse::<i32>().is_ok() {
+        if inner.parse::<u16>().is_ok() {
             return 0;
         } else {
             if cell_name_to_coords(&inner).is_none() {
@@ -308,7 +308,7 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
             }
             let (row, col) = cell_name_to_coords(&inner).unwrap();
             if row < 0 || row >= sheet.total_rows || col < 0 || col >= sheet.total_cols {
-                status_msg.push_str("Cell reference in up out of bounds");
+                status_msg.push_str("Cell reference in SLEEP out of bounds");
                 return 1;
             }
             return 0;
@@ -342,8 +342,8 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
 }
 
 // Optimized: Extract dependencies from a formula using HashSet
-pub fn extract_dependencies(sheet: &Spreadsheet, formula: &str) -> HashSet<(i32, i32)> {
-    let mut deps: HashSet<(i32, i32)> = HashSet::new();
+pub fn extract_dependencies(sheet: &Spreadsheet, formula: &str) -> HashSet<(u16, u16)> {
+    let mut deps: HashSet<(u16, u16)> = HashSet::new();
     let mut p = formula;
     
     while !p.is_empty() {
@@ -409,7 +409,7 @@ pub fn extract_dependencies(sheet: &Spreadsheet, formula: &str) -> HashSet<(i32,
 }
 
 // Detects circular dependency using DFS with HashSets
-pub fn has_circular_dependency(sheet: &Spreadsheet, row: i32, col: i32) -> bool {
+pub fn has_circular_dependency(sheet: &Spreadsheet, row: u16, col: u16) -> bool {
     let mut visited = HashSet::new();
     let mut stack = vec![(row, col)];
     
@@ -432,7 +432,7 @@ pub fn has_circular_dependency(sheet: &Spreadsheet, row: i32, col: i32) -> bool 
 }
 
 // Converts (row, col) to cell name.
-pub fn coords_to_cell_name(row: i32, col: i32) -> String {
+pub fn coords_to_cell_name(row: u16, col: u16) -> String {
     let mut n = col + 1;
     let mut col_str = String::new();
     while n > 0 {
@@ -549,7 +549,7 @@ pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
 }
 
 // Marks a cell and its dependents as error
-pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col: i32) {
+pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: u16, col: u16) {
     let mut stack = vec![(row, col)];
     let mut visited = HashSet::new();
     
@@ -583,7 +583,7 @@ impl<'a> CloneableSheet<'a> {
         Self { sheet }
     }
     
-    pub fn get_cell(&self, row: i32, col: i32) -> Option<&Cell> {
+    pub fn get_cell(&self, row: u16, col: u16) -> Option<&Cell> {
         if row >= 0 && row < self.sheet.total_rows && col >= 0 && col < self.sheet.total_cols {
             Some(&self.sheet.cells[row as usize][col as usize])
         } else {
@@ -591,18 +591,18 @@ impl<'a> CloneableSheet<'a> {
         }
     }
     
-    pub fn total_rows(&self) -> i32 {
+    pub fn total_rows(&self) -> u16 {
         self.sheet.total_rows
     }
     
-    pub fn total_cols(&self) -> i32 {
+    pub fn total_cols(&self) -> u16 {
         self.sheet.total_cols
     }
 }
 
 // Extract dependencies without borrowing the sheet
-pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
-    let mut deps: HashSet<(i32, i32)> = HashSet::new();
+pub fn extract_dependencies_without_self(formula: &str, total_rows: u16, total_cols: u16) -> HashSet<(u16, u16)> {
+    let mut deps: HashSet<(u16, u16)> = HashSet::new();
     let mut p = formula;
     
     while !p.is_empty() {
@@ -673,7 +673,7 @@ pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_c
 }
 
 // Detects circular dependency using DFS with indexes to avoid borrowing issues
-pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32) -> bool {
+pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: u16, col: u16) -> bool {
     let mut visited = HashSet::new();
     let mut stack = vec![(row, col)];
     
@@ -700,7 +700,7 @@ pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32)
 }
 
 // Add a function to recursively mark all dependent cells as dirty
-pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i32) {
+pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: u16, col: u16) {
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
     
