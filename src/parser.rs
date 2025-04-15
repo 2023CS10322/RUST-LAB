@@ -33,34 +33,11 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
     // Check if we have this range cached
     let cache_key = format!("{}({})", func_name, range_str);
     
-    // Parse the range to get dependencies for cache validation
-    let mut range_dependencies = HashSet::new();
-    if let Some(colon_pos) = range_str.find(':') {
-        let cell1 = range_str[..colon_pos].trim();
-        let cell2 = range_str[colon_pos + 1..].trim();
-        
-        if let (Some((start_row, start_col)), Some((end_row, end_col))) = 
-            (crate::sheet::cell_name_to_coords(cell1), crate::sheet::cell_name_to_coords(cell2)) {
-            
-            if start_row <= end_row && start_col <= end_col {
-                for r in start_row..=end_row {
-                    for c in start_col..=end_col {
-                        range_dependencies.insert((r, c));
-                    }
-                }
-            }
-        }
-    }
-    
     // Try to get from thread-local cache with improved validation
-    if let Some((cached_value, cached_deps)) = RANGE_CACHE.with(|cache| {
+    if let Some((cached_value, _)) = RANGE_CACHE.with(|cache| {
         cache.borrow().get(&cache_key).map(|(val, deps)| (*val, deps.clone()))
     }) {
-        // Make sure the cached dependencies match what we just calculated
-        // This prevents issues when different formulas refer to the same range
-        if cached_deps == range_dependencies {
-            return cached_value;
-        }
+        return cached_value;
     }
 
     if let Some(colon_pos) = range_str.find(':') {
@@ -71,7 +48,7 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
             None => { *error = 1; return 0; }
         };
         let (end_row, end_col) = match crate::sheet::cell_name_to_coords(cell2) {
-            Some(coords) => coords, // Fixed: added missing parenthesis
+            Some(coords) => coords,
             None => { *error = 1; return 0; }
         };
         if start_row > end_row || start_col > end_col {
@@ -86,6 +63,16 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
             return 0;
         }
         
+        // For very large ranges, use streaming calculation
+        let cell_count = (end_row - start_row + 1) * (end_col - start_col + 1);
+        let use_streaming = cell_count > 1000;
+        
+        // Optimized aggregation for large ranges
+        if use_streaming {
+            return evaluate_large_range(sheet, func_name, start_row, start_col, end_row, end_col, error, &cache_key);
+        }
+        
+        // Standard calculation for small to medium ranges
         let mut sum: i64 = 0;
         let mut min_val = i32::MAX;
         let mut max_val = i32::MIN;
@@ -136,16 +123,133 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
             _ => { *error = 1; 0 }
         };
         
-        // Cache the result
-        RANGE_CACHE.with(|cache| {
-            cache.borrow_mut().insert(cache_key, (result, range_dependencies));
-        });
+        // For large ranges, store minimal dependency information
+        if dependencies.len() > 100 {
+            // Just store the corners and the result to save memory
+            let mut minimal_deps = HashSet::new();
+            minimal_deps.insert((start_row, start_col));
+            minimal_deps.insert((start_row, end_col));
+            minimal_deps.insert((end_row, start_col));
+            minimal_deps.insert((end_row, end_col));
+            
+            // Cache the result with minimal dependencies
+            RANGE_CACHE.with(|cache| {
+                cache.borrow_mut().insert(cache_key, (result, minimal_deps));
+            });
+        } else {
+            // Cache the result with full dependencies for smaller ranges
+            RANGE_CACHE.with(|cache| {
+                cache.borrow_mut().insert(cache_key, (result, dependencies));
+            });
+        }
         
         result
     } else {
         *error = 1;
         0
     }
+}
+
+// New function to handle large ranges more efficiently
+fn evaluate_large_range<'a>(
+    sheet: &CloneableSheet<'a>, 
+    func_name: &str,
+    start_row: i32, 
+    start_col: i32, 
+    end_row: i32, 
+    end_col: i32,
+    error: &mut i32,
+    cache_key: &str
+) -> i32 {
+    // Process in chunks to avoid excessive memory usage
+    const CHUNK_SIZE: i32 = 128;
+    
+    let mut sum: i64 = 0;
+    let mut min_val = i32::MAX;
+    let mut max_val = i32::MIN;
+    let mut count = 0;
+    let mut sum_squares: f64 = 0.0;
+    
+    // For very large ranges, we'll compute statistics in a single pass
+    for chunk_row in (start_row..=end_row).step_by(CHUNK_SIZE as usize) {
+        let chunk_end_row = (chunk_row + CHUNK_SIZE - 1).min(end_row);
+        
+        for chunk_col in (start_col..=end_col).step_by(CHUNK_SIZE as usize) {
+            let chunk_end_col = (chunk_col + CHUNK_SIZE - 1).min(end_col);
+            
+            // Process this chunk
+            for r in chunk_row..=chunk_end_row {
+                for c in chunk_col..=chunk_end_col {
+                    if let Some(cell) = sheet.get_cell(r, c) {
+                        if cell.status == CellStatus::Error {
+                            *error = 3;
+                            return 0;
+                        }
+                        
+                        let value = cell.value;
+                        sum += value as i64;
+                        sum_squares += (value as f64) * (value as f64);
+                        
+                        if value < min_val { min_val = value; }
+                        if value > max_val { max_val = value; }
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    if count == 0 {
+        *error = 1;
+        return 0;
+    }
+    
+    // Calculate the result based on function
+    let result = match func_name {
+        "MIN" => min_val,
+        "MAX" => max_val,
+        "SUM" => {
+            if sum > i32::MAX as i64 || sum < i32::MIN as i64 {
+                *error = 3;  // Overflow
+                return 0;
+            }
+            sum as i32
+        },
+        "AVG" => {
+            let avg = sum / (count as i64);
+            if avg > i32::MAX as i64 || avg < i32::MIN as i64 {
+                *error = 3;  // Overflow
+                return 0;
+            }
+            avg as i32
+        },
+        "STDEV" => {
+            let mean = (sum as f64) / (count as f64);
+            let variance = (sum_squares / count as f64) - (mean * mean);
+            if variance < 0.0 {  // Handle floating point errors
+                0
+            } else {
+                (variance.sqrt()).round() as i32
+            }
+        },
+        _ => {
+            *error = 1;
+            0
+        }
+    };
+    
+    // Cache with minimal dependency info to save memory
+    let mut minimal_deps = HashSet::new();
+    minimal_deps.insert((start_row, start_col));
+    minimal_deps.insert((start_row, end_col));
+    minimal_deps.insert((end_row, start_col));
+    minimal_deps.insert((end_row, end_col));
+    
+    RANGE_CACHE.with(|cache| {
+        cache.borrow_mut().insert(cache_key.to_string(), (result, minimal_deps));
+    });
+    
+    result
 }
 
 fn parse_expr<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {

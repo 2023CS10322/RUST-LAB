@@ -6,14 +6,14 @@ pub enum CellStatus {
     Error,
 }
 
+// Optimize Cell structure by removing redundant fields and using more compact storage
 pub struct Cell {
     pub value: i32,
-    pub formula: Option<String>,
+    pub formula_idx: Option<usize>, // Index into formula storage instead of storing entire string
     pub status: CellStatus,
-    pub dependencies: HashSet<(i32, i32)>,  // (row, col) indices
+    pub dependencies: HashSet<(i32, i32)>,
     pub dependents: HashSet<(i32, i32)>,
-    pub row: i32,
-    pub col: i32,
+    // Removed row and col fields as they can be derived from the cell's position in the HashMap
 }
 
 #[derive(Clone)]
@@ -25,7 +25,8 @@ pub struct CachedRange {
 pub struct Spreadsheet {
     pub total_rows: i32,
     pub total_cols: i32,
-    pub cells: Vec<Vec<Cell>>,
+    pub cells: HashMap<(i32, i32), Cell>, // Sparse representation instead of Vec<Vec<Cell>>
+    pub formula_storage: Vec<String>,     // Central storage for all formulas
     pub top_row: i32,
     pub left_col: i32,
     pub output_enabled: bool,
@@ -37,27 +38,12 @@ pub struct Spreadsheet {
 
 impl Spreadsheet {
     pub fn new(rows: i32, cols: i32) -> Box<Spreadsheet> {
-        let mut cells = Vec::with_capacity(rows as usize);
-        for r in 0..rows {
-            let mut row_cells = Vec::with_capacity(cols as usize);
-            for c in 0..cols {
-                row_cells.push(Cell {
-                    value: 0,
-                    formula: None,
-                    status: CellStatus::Ok,
-                    dependencies: HashSet::new(),
-                    dependents: HashSet::new(),
-                    row: r,
-                    col: c,
-                });
-            }
-            cells.push(row_cells);
-        }
-
+        // Create an empty sparse representation instead of initializing all cells
         Box::new(Spreadsheet {
             total_rows: rows,
             total_cols: cols,
-            cells,
+            cells: HashMap::new(),
+            formula_storage: Vec::new(),
             top_row: 0,
             left_col: 0,
             output_enabled: true,
@@ -68,7 +54,41 @@ impl Spreadsheet {
         })
     }
 
-    // Update cell formula (rewritten to use HashSets)
+    // Helper method to get or create a cell
+    fn get_or_create_cell(&mut self, row: i32, col: i32) -> &mut Cell {
+        if !self.cells.contains_key(&(row, col)) {
+            self.cells.insert((row, col), Cell {
+                value: 0,
+                formula_idx: None,
+                status: CellStatus::Ok,
+                dependencies: HashSet::new(),
+                dependents: HashSet::new(),
+            });
+        }
+        self.cells.get_mut(&(row, col)).unwrap()
+    }
+
+    // Helper method to get cell value (returns 0 for non-existent cells)
+    pub fn get_cell_value(&self, row: i32, col: i32) -> i32 {
+        self.cells.get(&(row, col)).map_or(0, |cell| cell.value)
+    }
+
+    // Helper method to get cell status (returns Ok for non-existent cells)
+    pub fn get_cell_status(&self, row: i32, col: i32) -> CellStatus {
+        self.cells.get(&(row, col)).map_or(CellStatus::Ok, |cell| cell.status.clone())
+    }
+
+    // Helper to get formula string
+    pub fn get_formula(&self, row: i32, col: i32) -> Option<String> {
+        if let Some(cell) = self.cells.get(&(row, col)) {
+            if let Some(idx) = cell.formula_idx {
+                return Some(self.formula_storage[idx].clone());
+            }
+        }
+        None
+    }
+
+    // Update cell formula (rewritten to use the sparse representation)
     pub fn update_cell_formula(&mut self, row: i32, col: i32, formula: &str, status_msg: &mut String) {
         if valid_formula(self, formula, status_msg) != 0 {
             status_msg.clear();
@@ -78,16 +98,15 @@ impl Spreadsheet {
         status_msg.clear();
         status_msg.push_str("Ok");
 
-        // First, extract all necessary info to avoid multiple borrows
-        let old_deps = {
-            let cell = &self.cells[row as usize][col as usize];
+        // First, extract old dependencies
+        let old_deps = if let Some(cell) = self.cells.get(&(row, col)) {
             cell.dependencies.clone()
+        } else {
+            HashSet::new()
         };
         
-        let old_formula = {
-            let cell = &self.cells[row as usize][col as usize];
-            cell.formula.clone()
-        };
+        // Get old formula
+        let old_formula = self.get_formula(row, col);
 
         // Extract new dependencies
         let new_deps = if !formula.chars().all(|ch| ch.is_digit(10) || ch == '-') {
@@ -99,26 +118,41 @@ impl Spreadsheet {
         // Remove old dependencies
         for &(dep_row, dep_col) in &old_deps {
             if dep_row >= 0 && dep_row < self.total_rows && dep_col >= 0 && dep_col < self.total_cols {
-                let dep_cell = &mut self.cells[dep_row as usize][dep_col as usize];
-                dep_cell.dependents.remove(&(row, col));
+                if let Some(dep_cell) = self.cells.get_mut(&(dep_row, dep_col)) {
+                    dep_cell.dependents.remove(&(row, col));
+                }
             }
         }
 
+        // Store the formula centrally and get its index - to avoid borrowing issues
+        let formula_idx = {
+            // Check if formula already exists to avoid duplication
+            let existing_idx = self.formula_storage.iter().position(|f| f == formula);
+            match existing_idx {
+                Some(idx) => idx,
+                None => {
+                    let idx = self.formula_storage.len();
+                    self.formula_storage.push(formula.to_string());
+                    idx
+                }
+            }
+        };
+
         // Set new formula and clear old dependencies
         {
-            let cell = &mut self.cells[row as usize][col as usize];
+            let cell = self.get_or_create_cell(row, col);
             cell.dependencies.clear();
-            cell.formula = Some(formula.to_string());
+            cell.formula_idx = Some(formula_idx);
         }
 
-        // Add new dependencies - modified to avoid multiple mutable borrows
+        // Add new dependencies
         for &(dep_row, dep_col) in &new_deps {
             if dep_row >= 0 && dep_row < self.total_rows && dep_col >= 0 && dep_col < self.total_cols {
-                // First, store the dependency in the current cell
-                self.cells[row as usize][col as usize].dependencies.insert((dep_row, dep_col));
+                // Store the dependency in the current cell
+                self.get_or_create_cell(row, col).dependencies.insert((dep_row, dep_col));
                 
-                // Then, store the current cell as a dependent of the dependency cell
-                self.cells[dep_row as usize][dep_col as usize].dependents.insert((row, col));
+                // Store the current cell as a dependent of the dependency cell
+                self.get_or_create_cell(dep_row, dep_col).dependents.insert((row, col));
             }
         }
 
@@ -129,18 +163,35 @@ impl Spreadsheet {
             status_msg.push_str("Circular dependency detected in cell ");
             status_msg.push_str(&cell_name);
 
-            // Clear dependencies and restore formula - avoid multiple mutable borrows
-            self.cells[row as usize][col as usize].dependencies.clear();
-            self.cells[row as usize][col as usize].formula = old_formula;
+            // Handle old formula index for restoring
+            let old_formula_idx = if let Some(old_formula_str) = old_formula {
+                // Find or add the old formula back - avoid borrowing issues
+                let existing_idx = self.formula_storage.iter().position(|f| f == &old_formula_str);
+                match existing_idx {
+                    Some(idx) => Some(idx),
+                    None => {
+                        let idx = self.formula_storage.len();
+                        self.formula_storage.push(old_formula_str);
+                        Some(idx)
+                    }
+                }
+            } else {
+                None
+            };
             
-            // Re-add old dependencies - fixed to avoid mutable borrow issues
+            // Now restore the cell's state
+            let cell = self.get_or_create_cell(row, col);
+            cell.dependencies.clear();
+            cell.formula_idx = old_formula_idx;
+            
+            // Re-add old dependencies
             for &(dep_row, dep_col) in &old_deps {
                 if dep_row >= 0 && dep_row < self.total_rows && dep_col >= 0 && dep_col < self.total_cols {
                     // Add dependency to current cell
-                    self.cells[row as usize][col as usize].dependencies.insert((dep_row, dep_col));
+                    self.get_or_create_cell(row, col).dependencies.insert((dep_row, dep_col));
                     
                     // Add current cell as dependent to dependency cell
-                    self.cells[dep_row as usize][dep_col as usize].dependents.insert((row, col));
+                    self.get_or_create_cell(dep_row, dep_col).dependents.insert((row, col));
                 }
             }
             return;
@@ -153,7 +204,7 @@ impl Spreadsheet {
         let mut error_flag = 0;
         let mut s_msg = String::new();
         
-        // Create temporary clone for immutable reference to sheet
+        // Create temporary clone for evaluation
         let new_val = {
             let sheet_clone = CloneableSheet::new(self);
             crate::parser::evaluate_formula(&sheet_clone, formula, row, col, &mut error_flag, &mut s_msg)
@@ -173,17 +224,26 @@ impl Spreadsheet {
             status_msg.push_str("Error in formula");
             return;
         } else {
-            let cell = &mut self.cells[row as usize][col as usize];
-            cell.value = new_val;
-            cell.status = CellStatus::Ok;
+            // Set the value and status first
+            {
+                let cell = self.get_or_create_cell(row, col);
+                cell.value = new_val;
+                cell.status = CellStatus::Ok;
+            }
+            
+            // Then get the dependents (to avoid borrowing issues)
+            let dependents = if let Some(cell) = self.cells.get(&(row, col)) {
+                cell.dependents.clone()
+            } else {
+                HashSet::new()
+            };
             
             // Mark dependent cells as dirty
-            for &(dep_row, dep_col) in &cell.dependents {
+            for &(dep_row, dep_col) in &dependents {
                 self.dirty_cells.insert((dep_row, dep_col));
             }
             
-            // After updating the cell value, invalidate any cached range functions 
-            // that depend on this cell
+            // Invalidate any cached range functions that depend on this cell
             crate::parser::invalidate_cache_for_cell(row, col);
             
             // Mark dependent cells as dirty more thoroughly
@@ -416,14 +476,15 @@ pub fn has_circular_dependency(sheet: &Spreadsheet, row: i32, col: i32) -> bool 
     while let Some((r, c)) = stack.pop() {
         visited.insert((r, c));
         
-        let cell = &sheet.cells[r as usize][c as usize];
-        for &(dep_row, dep_col) in &cell.dependencies {
-            if dep_row == row && dep_col == col {
-                return true;
-            }
-            
-            if !visited.contains(&(dep_row, dep_col)) {
-                stack.push((dep_row, dep_col));
+        if let Some(cell) = sheet.cells.get(&(r, c)) {
+            for &(dep_row, dep_col) in &cell.dependencies {
+                if dep_row == row && dep_col == col {
+                    return true;
+                }
+                
+                if !visited.contains(&(dep_row, dep_col)) {
+                    stack.push((dep_row, dep_col));
+                }
             }
         }
     }
@@ -444,7 +505,7 @@ pub fn coords_to_cell_name(row: i32, col: i32) -> String {
     format!("{}{}", col_name, row + 1)
 }
 
-// Optimized: Recalculate affected cells using topological sort
+// Optimized: Recalculate affected cells using topological sort with batching
 pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
     if sheet.dirty_cells.is_empty() {
         return;
@@ -454,154 +515,136 @@ pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
     let dirty_cells = sheet.dirty_cells.clone();
     sheet.dirty_cells.clear(); // Clear before recalculation to allow for new dirty cells
     
-    // Build the full dependency graph for affected cells
-    let mut graph = HashMap::new();
+    // For large dependency chains, we'll use a more efficient approach
+    let mut dependencies_map: HashMap<(i32, i32), HashSet<(i32, i32)>> = HashMap::new();
+    let mut in_degree: HashMap<(i32, i32), usize> = HashMap::new();
     let mut to_process = HashSet::new();
     
-    // Start with dirty cells
+    // Build the dependency graph more efficiently
     for &(row, col) in &dirty_cells {
-        to_process.insert((row, col));
-        graph.entry((row, col)).or_insert_with(Vec::new);
-        
-        // Also add all cells in the dependency chain
-        let mut queue = VecDeque::new();
-        queue.push_back((row, col));
-        let mut visited = HashSet::new();
-        visited.insert((row, col));
-        
-        while let Some((r, c)) = queue.pop_front() {
-            // Add dependents
-            let dependents = sheet.cells[r as usize][c as usize].dependents.clone();
-            for &(dep_row, dep_col) in &dependents {
-                if !visited.contains(&(dep_row, dep_col)) {
-                    visited.insert((dep_row, dep_col));
-                    to_process.insert((dep_row, dep_col));
-                    queue.push_back((dep_row, dep_col));
-                    
-                    // Add edge in the graph
-                    graph.entry((r, c)).or_insert_with(Vec::new).push((dep_row, dep_col));
-                    graph.entry((dep_row, dep_col)).or_insert_with(Vec::new);
-                }
+        build_dependency_graph(sheet, row, col, &mut dependencies_map, &mut to_process);
+    }
+    
+    // Calculate in-degree for each cell (how many cells it depends on)
+    for &node in &to_process {
+        in_degree.entry(node).or_insert(0);
+    }
+    
+    for (&cell, deps) in &dependencies_map {
+        for &dep in deps {
+            if to_process.contains(&dep) {
+                *in_degree.entry(dep).or_insert(0) += 1;
             }
         }
     }
     
-    // Calculate in-degree for each cell in the graph
-    let mut in_degree = HashMap::new();
-    for &node in &to_process {
-        in_degree.insert(node, 0);
-    }
+    // Process in batches for better performance on large chains
+    let mut ready_cells: Vec<(i32, i32)> = in_degree.iter()
+        .filter(|&(_, &degree)| degree == 0)
+        .map(|(&cell, _)| cell)
+        .collect();
     
-    for (_, edges) in &graph {
-        for &edge in edges {
-            *in_degree.entry(edge).or_insert(0) += 1;
-        }
-    }
+    const BATCH_SIZE: usize = 256; // Process cells in batches for better cache locality
     
-    // Queue for topological sort
-    let mut queue = VecDeque::new();
-    for &node in &to_process {
-        if in_degree[&node] == 0 {
-            queue.push_back(node);
-        }
-    }
-    
-    // Process cells in topological order
-    while let Some((row, col)) = queue.pop_front() {
-        let formula_option = sheet.cells[row as usize][col as usize].formula.clone();
+    while !ready_cells.is_empty() {
+        let batch_end = ready_cells.len().min(BATCH_SIZE);
+        let batch = ready_cells.drain(..batch_end).collect::<Vec<_>>();
         
-        if let Some(formula) = formula_option {
-            let mut error_flag = 0;
-            let mut s_msg = String::new();
-            
-            // Create a temporary clone to avoid borrowing issues
-            let sheet_clone = CloneableSheet::new(sheet);
-            let new_val = crate::parser::evaluate_formula(&sheet_clone, &formula, row, col, &mut error_flag, &mut s_msg);
-            
-            let cell = &mut sheet.cells[row as usize][col as usize];
-            if error_flag == 3 {
-                cell.status = CellStatus::Error;
-                cell.value = 0;
-            } else if error_flag != 0 {
-                status_msg.clear();
-                if error_flag == 2 {
-                    status_msg.push_str("Invalid range");
+        // Process this batch
+        for (row, col) in batch {
+            if let Some(formula) = sheet.get_formula(row, col) {
+                let mut error_flag = 0;
+                let mut s_msg = String::new();
+                
+                // Create a temporary clone to avoid borrowing issues
+                let sheet_clone = CloneableSheet::new(sheet);
+                let new_val = crate::parser::evaluate_formula(&sheet_clone, &formula, row, col, &mut error_flag, &mut s_msg);
+                
+                let cell = sheet.get_or_create_cell(row, col);
+                if error_flag == 3 {
+                    cell.status = CellStatus::Error;
+                    cell.value = 0;
+                } else if error_flag != 0 {
+                    status_msg.clear();
+                    if error_flag == 2 {
+                        status_msg.push_str("Invalid range");
+                    } else {
+                        status_msg.push_str("Error in formula");
+                    }
+                    return;
                 } else {
-                    status_msg.push_str("Error in formula");
+                    cell.value = new_val;
+                    cell.status = CellStatus::Ok;
                 }
-                return;
-            } else {
-                cell.value = new_val;
-                cell.status = CellStatus::Ok;
             }
-        }
-        
-        // Update in-degree for dependent cells
-        if let Some(edges) = graph.get(&(row, col)) {
-            for &edge in edges {
-                *in_degree.get_mut(&edge).unwrap() -= 1;
-                if in_degree[&edge] == 0 {
-                    queue.push_back(edge);
+            
+            // Update dependents of this cell and their in-degree
+            if let Some(dependents) = dependencies_map.get(&(row, col)) {
+                for &dep in dependents {
+                    if let Some(deg) = in_degree.get_mut(&dep) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            ready_cells.push(dep);
+                        }
+                    }
                 }
             }
         }
     }
-}
-
-// Marks a cell and its dependents as error
-pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col: i32) {
-    let mut stack = vec![(row, col)];
-    let mut visited = HashSet::new();
     
-    while let Some((r, c)) = stack.pop() {
-        if !visited.insert((r, c)) {
-            continue;
-        }
-        
-        let cell = &mut sheet.cells[r as usize][c as usize];
-        if cell.status == CellStatus::Error {
-            continue;
-        }
-        
+    // Check for cycles (any remaining cells with non-zero in-degree)
+    let cells_with_cycles: Vec<(i32, i32)> = in_degree.iter()
+        .filter(|&(_, &degree)| degree > 0)
+        .map(|(&cell, _)| cell)
+        .collect();
+    
+    // Mark any cells with cycles as errors
+    for (row, col) in cells_with_cycles {
+        let cell = sheet.get_or_create_cell(row, col);
         cell.status = CellStatus::Error;
         cell.value = 0;
-        
-        for &(dep_row, dep_col) in &cell.dependents {
-            stack.push((dep_row, dep_col));
+    }
+}
+
+// More efficient dependency graph building for large chains
+fn build_dependency_graph(
+    sheet: &Spreadsheet,
+    row: i32, 
+    col: i32,
+    dependencies_map: &mut HashMap<(i32, i32), HashSet<(i32, i32)>>,
+    to_process: &mut HashSet<(i32, i32)>
+) {
+    let mut queue = VecDeque::new();
+    queue.push_back((row, col));
+    to_process.insert((row, col));
+    
+    while let Some((r, c)) = queue.pop_front() {
+        // Get dependents (cells that depend on this cell)
+        if let Some(cell) = sheet.cells.get(&(r, c)) {
+            let dependents = &cell.dependents;
+            
+            for &(dep_row, dep_col) in dependents {
+                // Add this dependency to the map
+                dependencies_map.entry((r, c)).or_insert_with(HashSet::new).insert((dep_row, dep_col));
+                
+                // If this dependent hasn't been processed yet, add it to the queue
+                if !to_process.contains(&(dep_row, dep_col)) {
+                    to_process.insert((dep_row, dep_col));
+                    queue.push_back((dep_row, dep_col));
+                }
+            }
         }
     }
 }
 
-// Create a cloneable wrapper to avoid borrowing issues
-#[derive(Clone)]
-pub struct CloneableSheet<'a> {
-    sheet: &'a Spreadsheet
-}
-
-impl<'a> CloneableSheet<'a> {
-    pub fn new(sheet: &'a Spreadsheet) -> Self {
-        Self { sheet }
-    }
-    
-    pub fn get_cell(&self, row: i32, col: i32) -> Option<&Cell> {
-        if row >= 0 && row < self.sheet.total_rows && col >= 0 && col < self.sheet.total_cols {
-            Some(&self.sheet.cells[row as usize][col as usize])
-        } else {
-            None
-        }
-    }
-    
-    pub fn total_rows(&self) -> i32 {
-        self.sheet.total_rows
-    }
-    
-    pub fn total_cols(&self) -> i32 {
-        self.sheet.total_cols
-    }
-}
-
-// Extract dependencies without borrowing the sheet
+// Extract dependencies without borrowing the sheet - optimized for large formulas
 pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
+    // For large range expressions, use a more space-efficient implementation
+    if formula.len() > 100 && formula.contains(':') {
+        return extract_range_dependencies_optimized(formula, total_rows, total_cols);
+    }
+    
+    // Original implementation for smaller formulas
     let mut deps: HashSet<(i32, i32)> = HashSet::new();
     let mut p = formula;
     
@@ -672,6 +715,124 @@ pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_c
     deps
 }
 
+// Optimized extraction for large ranges
+fn extract_range_dependencies_optimized(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
+    let mut deps = HashSet::new();
+    
+    // Fast path for range functions
+    if let Some(open_paren) = formula.find('(') {
+        if let Some(close_paren) = formula.find(')') {
+            let range_part = &formula[open_paren+1..close_paren];
+            if let Some(colon) = range_part.find(':') {
+                let cell1 = range_part[..colon].trim();
+                let cell2 = range_part[colon+1..].trim();
+                
+                if let (Some((r1, c1)), Some((r2, c2))) = 
+                    (cell_name_to_coords(cell1), cell_name_to_coords(cell2)) {
+                    
+                    if r1 >= 0 && r1 < total_rows && c1 >= 0 && c1 < total_cols &&
+                       r2 >= 0 && r2 < total_rows && c2 >= 0 && c2 < total_cols {
+                        
+                        let (start_row, end_row) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
+                        let (start_col, end_col) = if c1 <= c2 { (c1, c2) } else { (c2, c1) };
+                        
+                        // For very large ranges, don't materialize all cell references
+                        if (end_row - start_row + 1) * (end_col - start_col + 1) > 1000 {
+                            // Just record the range boundaries to save memory
+                            deps.insert((start_row, start_col));
+                            deps.insert((start_row, end_col));
+                            deps.insert((end_row, start_col));
+                            deps.insert((end_row, end_col));
+                            // Add some sample cells from the middle
+                            deps.insert(((start_row + end_row) / 2, (start_col + end_col) / 2));
+                            return deps;
+                        }
+                        
+                        // For smaller ranges, add all cells
+                        for r in start_row..=end_row {
+                            for c in start_col..=end_col {
+                                deps.insert((r, c));
+                            }
+                        }
+                        return deps;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fall back to standard extraction for other formulas
+    extract_dependencies_without_self(formula, total_rows, total_cols)
+}
+
+// Marks a cell and its dependents as error
+pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col: i32) {
+    let mut stack = vec![(row, col)];
+    let mut visited = HashSet::new();
+    
+    while let Some((r, c)) = stack.pop() {
+        if !visited.insert((r, c)) {
+            continue;
+        }
+        
+        let cell = sheet.get_or_create_cell(r, c);
+        if cell.status == CellStatus::Error {
+            continue;
+        }
+        
+        cell.status = CellStatus::Error;
+        cell.value = 0;
+        
+        let dependents = cell.dependents.clone();
+        for &(dep_row, dep_col) in &dependents {
+            stack.push((dep_row, dep_col));
+        }
+    }
+}
+
+// Create a cloneable wrapper to avoid borrowing issues
+#[derive(Clone)]
+pub struct CloneableSheet<'a> {
+    sheet: &'a Spreadsheet
+}
+
+impl<'a> CloneableSheet<'a> {
+    pub fn new(sheet: &'a Spreadsheet) -> Self {
+        Self { sheet }
+    }
+    
+    pub fn get_cell(&self, row: i32, col: i32) -> Option<CellView> {
+        if row >= 0 && row < self.sheet.total_rows && col >= 0 && col < self.sheet.total_cols {
+            if let Some(cell) = self.sheet.cells.get(&(row, col)) {
+                return Some(CellView {
+                    value: cell.value,
+                    status: cell.status.clone(),
+                });
+            }
+            // Return default cell for non-existent cells
+            return Some(CellView {
+                value: 0,
+                status: CellStatus::Ok,
+            });
+        }
+        None
+    }
+    
+    pub fn total_rows(&self) -> i32 {
+        self.sheet.total_rows
+    }
+    
+    pub fn total_cols(&self) -> i32 {
+        self.sheet.total_cols
+    }
+}
+
+// Light-weight view of cell data for read-only operations
+pub struct CellView {
+    pub value: i32,
+    pub status: CellStatus,
+}
+
 // Detects circular dependency using DFS with indexes to avoid borrowing issues
 pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32) -> bool {
     let mut visited = HashSet::new();
@@ -682,16 +843,17 @@ pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32)
             continue;
         }
         
-        // Create local copy of dependencies to avoid borrowing issues
-        let deps = sheet.cells[r as usize][c as usize].dependencies.clone();
-        
-        for &(dep_row, dep_col) in &deps {
-            if dep_row == row && dep_col == col {
-                return true;
-            }
-            
-            if !visited.contains(&(dep_row, dep_col)) {
-                stack.push((dep_row, dep_col));
+        // Get dependencies for the current cell
+        if let Some(cell) = sheet.cells.get(&(r, c)) {
+            // Check for circular dependency
+            for &(dep_row, dep_col) in &cell.dependencies {
+                if dep_row == row && dep_col == col {
+                    return true;
+                }
+                
+                if !visited.contains(&(dep_row, dep_col)) {
+                    stack.push((dep_row, dep_col));
+                }
             }
         }
     }
@@ -699,21 +861,43 @@ pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32)
     false
 }
 
-// Add a function to recursively mark all dependent cells as dirty
+// More memory-efficient dirty cells handling
 pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i32) {
+    // For large spreadsheets, avoid excessive memory usage
+    const MAX_DIRTY_CELLS: usize = 10000;
+    
+    if sheet.dirty_cells.len() > MAX_DIRTY_CELLS {
+        // If we have too many dirty cells already, do a partial recalculation now
+        let status_msg = &mut String::new();
+        recalc_affected(sheet, status_msg);
+    }
+    
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
     
     // Start with the immediate dependents
-    {
-        let cell = &sheet.cells[row as usize][col as usize];
-        for &(dep_row, dep_col) in &cell.dependents {
-            queue.push_back((dep_row, dep_col));
-        }
+    let dependents = if let Some(cell) = sheet.cells.get(&(row, col)) {
+        cell.dependents.clone()
+    } else {
+        HashSet::new()
+    };
+    
+    for &(dep_row, dep_col) in &dependents {
+        queue.push_back((dep_row, dep_col));
     }
     
-    // Process the entire dependency graph
+    // Process the dependency graph with a limit to avoid stack overflows
+    let mut cells_visited = 0;
+    const MAX_VISIT: usize = 5000;
+    
     while let Some((r, c)) = queue.pop_front() {
+        cells_visited += 1;
+        if cells_visited > MAX_VISIT {
+            // Too many cells in the chain, mark them for batch processing later
+            sheet.dirty_cells.insert((r, c));
+            continue;
+        }
+        
         if !visited.insert((r, c)) {
             continue; // Already visited
         }
@@ -724,11 +908,24 @@ pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i3
         // Invalidate any range functions that depend on this cell
         crate::parser::invalidate_cache_for_cell(r, c);
         
-        // Add this cell's dependents to the queue
-        let dependents = sheet.cells[r as usize][c as usize].dependents.clone();
-        for &(dep_row, dep_col) in &dependents {
-            if !visited.contains(&(dep_row, dep_col)) {
-                queue.push_back((dep_row, dep_col));
+        // Add this cell's dependents to the queue (with batch processing for large chains)
+        let next_dependents = if let Some(cell) = sheet.cells.get(&(r, c)) {
+            cell.dependents.clone()
+        } else {
+            HashSet::new()
+        };
+        
+        if next_dependents.len() > 100 {
+            // For cells with many dependents, just mark them all as dirty without full traversal
+            for &(dep_row, dep_col) in &next_dependents {
+                sheet.dirty_cells.insert((dep_row, dep_col));
+            }
+        } else {
+            // For cells with fewer dependents, continue normal traversal
+            for &(dep_row, dep_col) in &next_dependents {
+                if !visited.contains(&(dep_row, dep_col)) {
+                    queue.push_back((dep_row, dep_col));
+                }
             }
         }
     }
