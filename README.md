@@ -1,2 +1,0 @@
-# RUST-LAB
-rust lab
