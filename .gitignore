@@ -1,0 +1,35 @@
+# Compiled files and build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# IDE and editor files
+.vscode/
+.idea/
+*.code-workspace
+*.iml
+*.swp
+*.swo
+.DS_Store
+
+# Debug logs and output files
+*.log
+*.out
+debug/
+perf.data
+perf.data.old
+flamegraph.svg
+
+# Rustfmt backups
+**/*.rs.bk
+
+# Environment variables
+.env
+.env.local
+
+# Profiling data
+callgrind.out.*
+cachegrind.out.*
+
+# Test artifacts
+tests/tmp/
