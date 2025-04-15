@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug)]
 enum ASTNode {
     Literal(i32),
-    CellRef(i32, i32),
+    CellRef(u16, u16),
     BinaryOp(char, Box<ASTNode>, Box<ASTNode>),
     RangeFunction(String, String), // Function name and range string
     SleepFunction(Box<ASTNode>),
@@ -15,7 +15,7 @@ enum ASTNode {
 
 // Keep the cache in thread_local storage for thread safety
 thread_local! {
-    static RANGE_CACHE: std::cell::RefCell<HashMap<String, (i32, HashSet<(i32, i32)>)>> = 
+    static RANGE_CACHE: std::cell::RefCell<HashMap<String, (i32, HashSet<(u16, u16)>)>> = 
         std::cell::RefCell::new(HashMap::new());
 }
 
@@ -148,7 +148,7 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
     }
 }
 
-fn parse_expr<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
+fn parse_expr<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: u16, cur_col: u16, error: &mut i32) -> i32 {
     let mut result = parse_term(sheet, input, cur_row, cur_col, error);
     if *error != 0 { return 0; }
     skip_spaces(input);
@@ -170,7 +170,7 @@ fn parse_expr<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cu
     result
 }
 
-fn parse_term<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
+fn parse_term<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: u16, cur_col: u16, error: &mut i32) -> i32 {
     let mut value = parse_factor(sheet, input, cur_row, cur_col, error);
     if *error != 0 { return 0; }
     skip_spaces(input);
@@ -191,7 +191,7 @@ fn parse_term<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cu
     value
 }
 
-fn parse_factor<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
+fn parse_factor<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: u16, cur_col: u16, error: &mut i32) -> i32 {
     skip_spaces(input);
     if input.is_empty() {
         *error = 1;
@@ -361,8 +361,8 @@ fn evaluate_ast<'a>(sheet: &CloneableSheet<'a>, ast: &ASTNode, cur_row: i32, cur
 pub fn evaluate_formula<'a>(
     sheet: &CloneableSheet<'a>,
     formula: &str,
-    current_row: i32,
-    current_col: i32,
+    current_row: u16,
+    current_col: u16,
     error: &mut i32,
     status_msg: &mut String,
 ) -> i32 {
@@ -398,7 +398,7 @@ pub fn clear_range_cache() {
 }
 
 // Add a function to invalidate cache entries for a specific cell
-pub fn invalidate_cache_for_cell(row: i32, col: i32) {
+pub fn invalidate_cache_for_cell(row: u16, col: u16) {
     RANGE_CACHE.with(|cache| {
         let mut cache_ref = cache.borrow_mut();
         
