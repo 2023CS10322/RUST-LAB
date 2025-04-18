@@ -65,12 +65,12 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
         
         // For very large ranges, use streaming calculation
         let cell_count = (end_row - start_row + 1) * (end_col - start_col + 1);
-        let use_streaming = cell_count > 1000;
+        // let use_streaming = cell_count > 1000000;
         
-        // Optimized aggregation for large ranges
-        if use_streaming {
-            return evaluate_large_range(sheet, func_name, start_row, start_col, end_row, end_col, error, &cache_key);
-        }
+        // // Optimized aggregation for large ranges
+        // if use_streaming {
+        //     return evaluate_large_range(sheet, func_name, start_row, start_col, end_row, end_col, error, &cache_key);
+        // }
         
         // Standard calculation for small to medium ranges
         let mut sum: i64 = 0;
@@ -122,26 +122,30 @@ fn evaluate_range_function<'a>(sheet: &CloneableSheet<'a>, func_name: &str, rang
             },
             _ => { *error = 1; 0 }
         };
+         // Cache the result with full dependencies for smaller ranges
+         RANGE_CACHE.with(|cache| {
+            cache.borrow_mut().insert(cache_key, (result, dependencies));
+        });
         
-        // For large ranges, store minimal dependency information
-        if dependencies.len() > 100 {
-            // Just store the corners and the result to save memory
-            let mut minimal_deps = HashSet::new();
-            minimal_deps.insert((start_row, start_col));
-            minimal_deps.insert((start_row, end_col));
-            minimal_deps.insert((end_row, start_col));
-            minimal_deps.insert((end_row, end_col));
+        // // For large ranges, store minimal dependency information
+        // if dependencies.len() > 1000000 {
+        //     // Just store the corners and the result to save memory
+        //     let mut minimal_deps = HashSet::new();
+        //     minimal_deps.insert((start_row, start_col));
+        //     minimal_deps.insert((start_row, end_col));
+        //     minimal_deps.insert((end_row, start_col));
+        //     minimal_deps.insert((end_row, end_col));
             
-            // Cache the result with minimal dependencies
-            RANGE_CACHE.with(|cache| {
-                cache.borrow_mut().insert(cache_key, (result, minimal_deps));
-            });
-        } else {
-            // Cache the result with full dependencies for smaller ranges
-            RANGE_CACHE.with(|cache| {
-                cache.borrow_mut().insert(cache_key, (result, dependencies));
-            });
-        }
+        //     // Cache the result with minimal dependencies
+        //     RANGE_CACHE.with(|cache| {
+        //         cache.borrow_mut().insert(cache_key, (result, minimal_deps));
+        //     });
+        // } else {
+        //     // Cache the result with full dependencies for smaller ranges
+        //     RANGE_CACHE.with(|cache| {
+        //         cache.borrow_mut().insert(cache_key, (result, dependencies));
+        //     });
+        // }
         
         result
     } else {

@@ -37,6 +37,40 @@ pub struct Spreadsheet {
 }
 
 impl Spreadsheet {
+    pub fn get_cell_raw_content(&self, row: i32, col: i32) -> String {
+        // Look for the cell in the HashMap using the (row, col) tuple as the key.
+        if let Some(cell) = self.cells.get(&(row, col)) {
+            // If the cell exists, check if it has a formula index.
+            if let Some(idx) = cell.formula_idx {
+                // Check if the index is within the bounds of the formula storage.
+                // This is a safeguard against potential inconsistencies.
+                if idx < self.formula_storage.len() {
+                    // If the index is valid, retrieve the string from storage.
+                    // Clone it because we need to return an owned String.
+                    self.formula_storage[idx].clone()
+                } else {
+                    // This case indicates an invalid state (index out of bounds).
+                    // Log an error and return an empty string.
+                    eprintln!(
+                        "Error: Cell ({}, {}) has an invalid formula index: {}",
+                        row, col, idx
+                    );
+                    String::new()
+                }
+            } else {
+                // The cell exists in the map, but has no formula_idx.
+                // This implies the cell was likely created implicitly (e.g., as a
+                // dependency or via get_or_create_cell) but never had a formula
+                // explicitly assigned via update_cell_formula.
+                // For the purpose of displaying raw content in a formula bar,
+                // an empty string is appropriate here.
+                String::new()
+            }
+        } else {
+            // If self.cells.get returns None, the cell doesn't exist in our sparse map.
+            // Return an empty string to represent an empty cell.
+            String::new()
+        }}
     pub fn new(rows: i32, cols: i32) -> Box<Spreadsheet> {
         // Create an empty sparse representation instead of initializing all cells
         Box::new(Spreadsheet {
@@ -505,66 +539,104 @@ pub fn coords_to_cell_name(row: i32, col: i32) -> String {
     format!("{}{}", col_name, row + 1)
 }
 
-// Optimized: Recalculate affected cells using a direct adjacency list + in-degree topo sort
+// Optimized: Recalculate affected cells using topological sort with batching
 pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
-    // 1. Grab all dirty cells and clear the set
-    let dirty: Vec<(i32, i32)> = sheet.dirty_cells.iter().cloned().collect();
-    sheet.dirty_cells.clear();
-
-    // 2. Build adjacency list (node -> dependents) and in-degree map
-    use std::collections::HashMap;
-    let mut adj: HashMap<(i32, i32), Vec<(i32, i32)>> = HashMap::new();
-    let mut indegree: HashMap<(i32, i32), usize> = HashMap::new();
-
-    for &node in &dirty {
-        indegree.entry(node).or_insert(0);
-        if let Some(cell) = sheet.cells.get(&node) {
-            for &dep in &cell.dependents {
-                adj.entry(node).or_default().push(dep);
-                *indegree.entry(dep).or_insert(0) += 1;
+    if sheet.dirty_cells.is_empty() {
+        return;
+    }
+    
+    // Improved dependency tracking for recalculation
+    let dirty_cells = sheet.dirty_cells.clone();
+    sheet.dirty_cells.clear(); // Clear before recalculation to allow for new dirty cells
+    
+    // For large dependency chains, we'll use a more efficient approach
+    let mut dependencies_map: HashMap<(i32, i32), HashSet<(i32, i32)>> = HashMap::new();
+    let mut in_degree: HashMap<(i32, i32), usize> = HashMap::new();
+    let mut to_process = HashSet::new();
+    
+    // Build the dependency graph more efficiently
+    for &(row, col) in &dirty_cells {
+        build_dependency_graph(sheet, row, col, &mut dependencies_map, &mut to_process);
+    }
+    
+    // Calculate in-degree for each cell (how many cells it depends on)
+    for &node in &to_process {
+        in_degree.entry(node).or_insert(0);
+    }
+    
+    for (&cell, deps) in &dependencies_map {
+        for &dep in deps {
+            if to_process.contains(&dep) {
+                *in_degree.entry(dep).or_insert(0) += 1;
             }
         }
     }
-
-    // 3. Initialize queue with zero–in-degree nodes
-    let mut queue: Vec<(i32, i32)> = indegree
-        .iter()
-        .filter_map(|(&n, &d)| if d == 0 { Some(n) } else { None })
+    
+    // Process in batches for better performance on large chains
+    let mut ready_cells: Vec<(i32, i32)> = in_degree.iter()
+        .filter(|&(_, &degree)| degree == 0)
+        .map(|(&cell, _)| cell)
         .collect();
-
-    // 4. Process in topo order
-    while let Some((r, c)) = queue.pop() {
-        if let Some(formula) = sheet.get_formula(r, c) {
-            let mut err = 0;
-            let mut msg = String::new();
-            let clone = CloneableSheet::new(sheet);
-            let new_val = crate::parser::evaluate_formula(&clone, &formula, r, c, &mut err, &mut msg);
-            let cell = sheet.get_or_create_cell(r, c);
-            match err {
-                3 => { cell.status = CellStatus::Error; cell.value = 0; }
-                0 => { cell.value = new_val; cell.status = CellStatus::Ok; }
-                _ => { status_msg.clear(); status_msg.push_str("Error in formula"); return; }
+    
+    const BATCH_SIZE: usize = 256; // Process cells in batches for better cache locality
+    
+    while !ready_cells.is_empty() {
+        let batch_end = ready_cells.len().min(BATCH_SIZE);
+        let batch = ready_cells.drain(..batch_end).collect::<Vec<_>>();
+        
+        // Process this batch
+        for (row, col) in batch {
+            if let Some(formula) = sheet.get_formula(row, col) {
+                let mut error_flag = 0;
+                let mut s_msg = String::new();
+                
+                // Create a temporary clone to avoid borrowing issues
+                let sheet_clone = CloneableSheet::new(sheet);
+                let new_val = crate::parser::evaluate_formula(&sheet_clone, &formula, row, col, &mut error_flag, &mut s_msg);
+                
+                let cell = sheet.get_or_create_cell(row, col);
+                if error_flag == 3 {
+                    cell.status = CellStatus::Error;
+                    cell.value = 0;
+                } else if error_flag != 0 {
+                    status_msg.clear();
+                    if error_flag == 2 {
+                        status_msg.push_str("Invalid range");
+                    } else {
+                        status_msg.push_str("Error in formula");
+                    }
+                    return;
+                } else {
+                    cell.value = new_val;
+                    cell.status = CellStatus::Ok;
+                }
             }
-        }
-        if let Some(neighs) = adj.get(&(r, c)) {
-            for &n in neighs {
-                if let Some(d) = indegree.get_mut(&n) {
-                    *d -= 1;
-                    if *d == 0 {
-                        queue.push(n);
+            
+            // Update dependents of this cell and their in-degree
+            if let Some(dependents) = dependencies_map.get(&(row, col)) {
+                for &dep in dependents {
+                    if let Some(deg) = in_degree.get_mut(&dep) {
+                        *deg -= 1;
+                        if *deg == 0 {
+                            ready_cells.push(dep);
+                        }
                     }
                 }
             }
         }
     }
-
-    // 5. Any node still with in-degree>0 is in a cycle → mark as error
-    for (&(r, c), &d) in &indegree {
-        if d > 0 {
-            let cell = sheet.get_or_create_cell(r, c);
-            cell.status = CellStatus::Error;
-            cell.value = 0;
-        }
+    
+    // Check for cycles (any remaining cells with non-zero in-degree)
+    let cells_with_cycles: Vec<(i32, i32)> = in_degree.iter()
+        .filter(|&(_, &degree)| degree > 0)
+        .map(|(&cell, _)| cell)
+        .collect();
+    
+    // Mark any cells with cycles as errors
+    for (row, col) in cells_with_cycles {
+        let cell = sheet.get_or_create_cell(row, col);
+        cell.status = CellStatus::Error;
+        cell.value = 0;
     }
 }
 
@@ -602,9 +674,9 @@ fn build_dependency_graph(
 // Extract dependencies without borrowing the sheet - optimized for large formulas
 pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
     // For large range expressions, use a more space-efficient implementation
-    if formula.len() > 100 && formula.contains(':') {
-        return extract_range_dependencies_optimized(formula, total_rows, total_cols);
-    }
+    // if formula.len() > 100 && formula.contains(':') {
+    //     return extract_range_dependencies_optimized(formula, total_rows, total_cols);
+    // }
     
     // Original implementation for smaller formulas
     let mut deps: HashSet<(i32, i32)> = HashSet::new();
@@ -677,55 +749,55 @@ pub fn extract_dependencies_without_self(formula: &str, total_rows: i32, total_c
     deps
 }
 
-// Optimized extraction for large ranges
-fn extract_range_dependencies_optimized(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
-    let mut deps = HashSet::new();
+// // Optimized extraction for large ranges
+// fn extract_range_dependencies_optimized(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
+//     let mut deps = HashSet::new();
     
-    // Fast path for range functions
-    if let Some(open_paren) = formula.find('(') {
-        if let Some(close_paren) = formula.find(')') {
-            let range_part = &formula[open_paren+1..close_paren];
-            if let Some(colon) = range_part.find(':') {
-                let cell1 = range_part[..colon].trim();
-                let cell2 = range_part[colon+1..].trim();
+//     // Fast path for range functions
+//     if let Some(open_paren) = formula.find('(') {
+//         if let Some(close_paren) = formula.find(')') {
+//             let range_part = &formula[open_paren+1..close_paren];
+//             if let Some(colon) = range_part.find(':') {
+//                 let cell1 = range_part[..colon].trim();
+//                 let cell2 = range_part[colon+1..].trim();
                 
-                if let (Some((r1, c1)), Some((r2, c2))) = 
-                    (cell_name_to_coords(cell1), cell_name_to_coords(cell2)) {
+//                 if let (Some((r1, c1)), Some((r2, c2))) = 
+//                     (cell_name_to_coords(cell1), cell_name_to_coords(cell2)) {
                     
-                    if r1 >= 0 && r1 < total_rows && c1 >= 0 && c1 < total_cols &&
-                       r2 >= 0 && r2 < total_rows && c2 >= 0 && c2 < total_cols {
+//                     if r1 >= 0 && r1 < total_rows && c1 >= 0 && c1 < total_cols &&
+//                        r2 >= 0 && r2 < total_rows && c2 >= 0 && c2 < total_cols {
                         
-                        let (start_row, end_row) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
-                        let (start_col, end_col) = if c1 <= c2 { (c1, c2) } else { (c2, c1) };
+//                         let (start_row, end_row) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
+//                         let (start_col, end_col) = if c1 <= c2 { (c1, c2) } else { (c2, c1) };
                         
-                        // For very large ranges, don't materialize all cell references
-                        if (end_row - start_row + 1) * (end_col - start_col + 1) > 1000 {
-                            // Just record the range boundaries to save memory
-                            deps.insert((start_row, start_col));
-                            deps.insert((start_row, end_col));
-                            deps.insert((end_row, start_col));
-                            deps.insert((end_row, end_col));
-                            // Add some sample cells from the middle
-                            deps.insert(((start_row + end_row) / 2, (start_col + end_col) / 2));
-                            return deps;
-                        }
+//                         // For very large ranges, don't materialize all cell references
+//                         // if (end_row - start_row + 1) * (end_col - start_col + 1) > 999_999_999 {
+//                         //     // Just record the range boundaries to save memory
+//                         //     deps.insert((start_row, start_col));
+//                         //     deps.insert((start_row, end_col));
+//                         //     deps.insert((end_row, start_col));
+//                         //     deps.insert((end_row, end_col));
+//                         //     // Add some sample cells from the middle
+//                         //     deps.insert(((start_row + end_row) / 2, (start_col + end_col) / 2));
+//                         //     return deps;
+//                         // }
                         
-                        // For smaller ranges, add all cells
-                        for r in start_row..=end_row {
-                            for c in start_col..=end_col {
-                                deps.insert((r, c));
-                            }
-                        }
-                        return deps;
-                    }
-                }
-            }
-        }
-    }
+//                         // For smaller ranges, add all cells
+//                         for r in start_row..=end_row {
+//                             for c in start_col..=end_col {
+//                                 deps.insert((r, c));
+//                             }
+//                         }
+//                         return deps;
+//                     }
+//                 }
+//             }
+//         }
+//     }
     
-    // Fall back to standard extraction for other formulas
-    extract_dependencies_without_self(formula, total_rows, total_cols)
-}
+//     // Fall back to standard extraction for other formulas
+//     extract_dependencies_without_self(formula, total_rows, total_cols)
+// }
 
 // Marks a cell and its dependents as error
 pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col: i32) {
@@ -825,7 +897,15 @@ pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32)
 
 // More memory-efficient dirty cells handling
 pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i32) {
-    // Always mark all dependents as dirty for full recalculation
+    // For large spreadsheets, avoid excessive memory usage
+    const MAX_DIRTY_CELLS: usize = 1000000;
+    
+    // if sheet.dirty_cells.len() > MAX_DIRTY_CELLS {
+    //     // If we have too many dirty cells already, do a partial recalculation now
+    //     let status_msg = &mut String::new();
+    //     recalc_affected(sheet, status_msg);
+    // }
+    
     let mut queue = VecDeque::new();
     let mut visited = HashSet::new();
     
@@ -840,31 +920,51 @@ pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i3
         queue.push_back((dep_row, dep_col));
     }
     
-    // Process the dependency graph without limits
+    // Process the dependency graph with a limit to avoid stack overflows
     let mut cells_visited = 0;
-    // no visit limit - mark everything
+    const MAX_VISIT: usize = 5000;
     
     while let Some((r, c)) = queue.pop_front() {
-        // mark as dirty
+        cells_visited += 1;
+        // if cells_visited > MAX_VISIT {
+        //     // Too many cells in the chain, mark them for batch processing later
+        //     sheet.dirty_cells.insert((r, c));
+        //     continue;
+        // }
+        
         if !visited.insert((r, c)) {
             continue; // Already visited
         }
         
+        // Mark as dirty
         sheet.dirty_cells.insert((r, c));
         
         // Invalidate any range functions that depend on this cell
         crate::parser::invalidate_cache_for_cell(r, c);
         
-        // enqueue this cell's dependents
-        let next = if let Some(cell) = sheet.cells.get(&(r, c)) {
+        // Add this cell's dependents to the queue (with batch processing for large chains)
+        let next_dependents = if let Some(cell) = sheet.cells.get(&(r, c)) {
             cell.dependents.clone()
         } else {
             HashSet::new()
         };
-        for &(dr, dc) in &next {
-            if !visited.contains(&(dr, dc)) {
-                queue.push_back((dr, dc));
-            }
+
+        for &(dep_row, dep_col) in &next_dependents {
+            sheet.dirty_cells.insert((dep_row, dep_col));
         }
+
+        // if next_dependents.len() > 1000000 {
+        //     // For cells with many dependents, just mark them all as dirty without full traversal
+        //     for &(dep_row, dep_col) in &next_dependents {
+        //         sheet.dirty_cells.insert((dep_row, dep_col));
+        //     }
+        // } else {
+        //     // For cells with fewer dependents, continue normal traversal
+        //     for &(dep_row, dep_col) in &next_dependents {
+        //         if !visited.contains(&(dep_row, dep_col)) {
+        //             queue.push_back((dep_row, dep_col));
+        //         }
+        //     }
+        // }
     }
 }
