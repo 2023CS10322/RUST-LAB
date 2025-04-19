@@ -13,14 +13,38 @@ pub struct Cell {
     pub status: CellStatus,
     pub dependencies: HashSet<(i32, i32)>,
     pub dependents: HashSet<(i32, i32)>,
+    // --- Additions for Cell History ---
+    #[cfg(feature = "cell_history")]
+    pub history: VecDeque<i32>, // Store last N values
+    // --- End Additions ---
     // Removed row and col fields as they can be derived from the cell's position in the HashMap
 }
+
+// --- Additions for Undo State ---
+#[cfg(feature = "undo_state")]
+#[derive(Clone, Debug)] // Clone might be useful, Debug for inspection
+struct PreviousCellState {
+    row: i32,
+    col: i32,
+    previous_formula_idx: Option<usize>, // Store index directly
+    previous_value: i32,
+    previous_status: CellStatus,
+    previous_dependencies: HashSet<(i32, i32)>,
+    // Store the dependents that pointed *to this cell* before the change
+    previous_dependents_of_cell: HashSet<(i32, i32)>,
+}
+// --- End Additions ---
+
+// Helper constant for history size
+#[cfg(feature = "cell_history")]
+const MAX_HISTORY_SIZE: usize = 10;
 
 #[derive(Clone)]
 pub struct CachedRange {
     pub value: i32,
     pub dependencies: HashSet<(i32, i32)>,
 }
+
 
 pub struct Spreadsheet {
     pub total_rows: i32,
@@ -34,6 +58,12 @@ pub struct Spreadsheet {
     pub cache: HashMap<String, CachedRange>,  // Cached range evaluations
     pub dirty_cells: HashSet<(i32, i32)>,     // Track cells needing recalculation
     pub in_degree: HashMap<(i32, i32), usize>, // For topological sort
+    // --- Additions for Undo State ---
+    #[cfg(feature = "undo_state")]
+    previous_state: Option<PreviousCellState>, 
+    #[cfg(feature = "undo_state")] // <-- Update feature name
+    redo_state: Option<PreviousCellState>, // Store the single previous state
+    // --- End Additions ---
 }
 
 impl Spreadsheet {
@@ -85,8 +115,47 @@ impl Spreadsheet {
             cache: HashMap::new(),
             dirty_cells: HashSet::new(),
             in_degree: HashMap::new(),
+            // --- Additions for Undo State ---
+            #[cfg(feature = "undo_state")]
+            previous_state: None, // Initialize previous state to None
+            #[cfg(feature = "undo_state")] // <-- Update feature name
+             redo_state: None, // Initialize redo state to None
+            // --- End Additions ---
         })
     }
+
+    // --- Additions for Undo State ---
+    // --- Helper to capture state (used by undo and redo) ---
+    #[cfg(feature = "undo_state")] // <-- Update feature name
+    fn capture_current_cell_state(&self, row: i32, col: i32) -> PreviousCellState {
+        // This is essentially the same as capture_previous_state,
+        // but the name clarifies its use in undo/redo logic.
+        if let Some(cell) = self.cells.get(&(row, col)) {
+            PreviousCellState {
+                row,
+                col,
+                previous_formula_idx: cell.formula_idx,
+                previous_value: cell.value,
+                previous_status: cell.status.clone(),
+                previous_dependencies: cell.dependencies.clone(),
+                previous_dependents_of_cell: cell.dependents.clone(),
+            }
+        } else {
+            // Cell doesn't exist, capture default state
+             PreviousCellState {
+                row,
+                col,
+                previous_formula_idx: None,
+                previous_value: 0,
+                previous_status: CellStatus::Ok,
+                previous_dependencies: HashSet::new(),
+                previous_dependents_of_cell: HashSet::new(),
+            }
+        }
+    }
+    // --- End Helper ---
+
+
 
     // Helper method to get or create a cell
     fn get_or_create_cell(&mut self, row: i32, col: i32) -> &mut Cell {
@@ -97,6 +166,9 @@ impl Spreadsheet {
                 status: CellStatus::Ok,
                 dependencies: HashSet::new(),
                 dependents: HashSet::new(),
+                // Initialize cell history if feature is enabled
+                #[cfg(feature = "cell_history")]
+                history: VecDeque::with_capacity(MAX_HISTORY_SIZE),
             });
         }
         self.cells.get_mut(&(row, col)).unwrap()
@@ -122,8 +194,47 @@ impl Spreadsheet {
         None
     }
 
+    // Helper to update cell value and potentially its history
+    fn update_cell_value(&mut self, row: i32, col: i32, new_value: i32, new_status: CellStatus) {
+        let cell = self.get_or_create_cell(row, col);
+
+        // --- Additions for Cell History ---
+        // Only add to history if the value actually changes and feature is enabled
+        #[cfg(feature = "cell_history")]
+        {
+            if cell.value != new_value {
+                if cell.history.len() == MAX_HISTORY_SIZE {
+                    cell.history.pop_front(); // Remove the oldest value
+                }
+                cell.history.push_back(cell.value); // Store the *current* value before overwriting
+            }
+        }
+        // --- End Additions ---
+
+        cell.value = new_value;
+        cell.status = new_status;
+   }
+   // Add getter for cell history if feature enabled
+   #[cfg(feature = "cell_history")]
+   pub fn get_cell_history(&self, row: i32, col: i32) -> Option<Vec<i32>> {
+        self.cells.get(&(row, col)).map(|cell| cell.history.iter().cloned().collect())
+   }
     // Update cell formula (rewritten to use the sparse representation)
     pub fn update_cell_formula(&mut self, row: i32, col: i32, formula: &str, status_msg: &mut String) {
+        // --- Additions for Undo State ---
+
+        // Clear the redo state whenever a new action is taken
+        #[cfg(feature = "undo_state")] // <-- Update feature name
+        {
+            self.redo_state = None; // Any new edit invalidates the redo history
+        }
+         // Capture state BEFORE any modification, only if feature is enabled
+         #[cfg(feature = "undo_state")]
+         let captured_prev_state = self.capture_current_cell_state(row, col);
+         // --- End Additions ---
+
+        
+        
         if valid_formula(self, formula, status_msg) != 0 {
             status_msg.clear();
             status_msg.push_str("Unrecognized");
@@ -131,6 +242,13 @@ impl Spreadsheet {
         }
         status_msg.clear();
         status_msg.push_str("Ok");
+
+        // --- Store the captured state (only if feature enabled) ---
+        #[cfg(feature = "undo_state")]
+        {
+            self.previous_state = Some(captured_prev_state);
+        }
+        // --- End Additions ---
 
         // First, extract old dependencies
         let old_deps = if let Some(cell) = self.cells.get(&(row, col)) {
@@ -261,6 +379,15 @@ impl Spreadsheet {
             // Set the value and status first
             {
                 let cell = self.get_or_create_cell(row, col);
+                #[cfg(feature = "cell_history")]
+                    {
+                        if cell.value != new_val{
+                            if cell.history.len() == 10 {
+                                cell.history.pop_front(); // Remove the oldest value
+                            }
+                            cell.history.push_back(cell.value); // Store the *current* value before overwriting
+                        }
+                    }
                 cell.value = new_val;
                 cell.status = CellStatus::Ok;
             }
@@ -287,6 +414,111 @@ impl Spreadsheet {
             recalc_affected(self, status_msg);
         }
     }
+
+    // --- Apply a captured state (Helper for Undo/Redo) ---
+    #[cfg(feature = "undo_state")] // <-- Update feature name
+    fn apply_state(&mut self, state_to_apply: &PreviousCellState, status_msg: &mut String) {
+         let row = state_to_apply.row;
+         let col = state_to_apply.col;
+
+         // 1. Get current dependencies before overwriting
+         let current_deps = self.cells.get(&(row, col))
+                                 .map_or(HashSet::new(), |c| c.dependencies.clone());
+
+         // 2. Restore the cell's core properties
+         {
+             let cell = self.get_or_create_cell(row, col);
+             cell.value = state_to_apply.previous_value;
+             cell.status = state_to_apply.previous_status.clone();
+             cell.formula_idx = state_to_apply.previous_formula_idx;
+             cell.dependencies = state_to_apply.previous_dependencies.clone();
+             cell.dependents = state_to_apply.previous_dependents_of_cell.clone();
+         }
+
+         // 3. Update dependent links based on the change
+         // Remove the current cell from the dependents list of its *current* dependencies
+         for &(dep_row, dep_col) in &current_deps {
+             if let Some(dep_cell) = self.cells.get_mut(&(dep_row, dep_col)) {
+                 dep_cell.dependents.remove(&(row, col));
+             }
+         }
+         // Add the current cell back to the dependents list of its *applied* dependencies
+         for &(dep_row, dep_col) in &state_to_apply.previous_dependencies {
+              self.get_or_create_cell(dep_row, dep_col).dependents.insert((row, col));
+         }
+
+         // 4. Mark dirty and recalculate
+         self.dirty_cells.insert((row, col));
+         mark_cell_and_dependents_dirty(self, row, col);
+         crate::parser::invalidate_cache_for_cell(row, col);
+         recalc_affected(self, status_msg); // Recalculate using passed status_msg
+    }
+    // --- End Apply State Helper ---
+
+
+    // --- Modified Undo Method ---
+    #[cfg(feature = "undo_state")] // <-- Update feature name
+    pub fn undo(&mut self, status_msg: &mut String) {
+        status_msg.clear();
+
+        if let Some(state_to_restore) = self.previous_state.take() { // Take ownership of undo state
+            // State to restore exists
+
+            // --- Capture the state *before* undoing, for REDO ---
+            let state_before_undo = self.capture_current_cell_state(state_to_restore.row, state_to_restore.col);
+            self.redo_state = Some(state_before_undo); // Store for redo
+            // --- End Redo Capture ---
+
+            // Apply the restored state
+            self.apply_state(&state_to_restore, status_msg); // Use helper
+
+            // Reuse the status_msg from recalc_affected or set success
+            if status_msg.is_empty() || status_msg == "Ok" {
+                 status_msg.clear();
+                 status_msg.push_str("Undo successful");
+            }
+        } else {
+            // No previous state saved
+            status_msg.push_str("Nothing to undo");
+             // Ensure redo is not possible if undo wasn't
+             self.redo_state = None;
+        }
+    }
+    // --- End Undo Method ---
+
+
+    // --- New Redo Method ---
+    #[cfg(feature = "undo_state")] // <-- Update feature name
+    pub fn redo(&mut self, status_msg: &mut String) {
+        status_msg.clear();
+
+        if let Some(state_to_redo) = self.redo_state.take() { // Take ownership of redo state
+            // State to redo exists
+
+            // --- Capture the state *before* redoing, for future UNDO ---
+             let state_before_redo = self.capture_current_cell_state(state_to_redo.row, state_to_redo.col);
+             self.previous_state = Some(state_before_redo); // Store for undo
+            // --- End Undo Capture ---
+
+             // Apply the redone state
+             self.apply_state(&state_to_redo, status_msg); // Use helper
+
+             // Reuse the status_msg from recalc_affected or set success
+             if status_msg.is_empty() || status_msg == "Ok" {
+                 status_msg.clear();
+                 status_msg.push_str("Redo successful");
+             }
+
+        } else {
+            // No redo state saved
+            status_msg.push_str("Nothing to redo");
+            // Ensure previous_state isn't accidentally left if redo fails
+            // (Though update_cell_formula should handle this mostly)
+            // self.previous_state = None; // Optional: Be defensive? Might clear valid undo. Leave for now.
+        }
+    }
+    // --- End Redo Method ---
+
 }
 
 // Utility: converts cell name (e.g. "A1") to (row, col).
@@ -607,6 +839,15 @@ pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
                     }
                     return;
                 } else {
+                    #[cfg(feature = "cell_history")]
+                    {
+                        if cell.value != new_val{
+                            if cell.history.len() == 10 {
+                                cell.history.pop_front(); // Remove the oldest value
+                            }
+                            cell.history.push_back(cell.value); // Store the *current* value before overwriting
+                        }
+                    }
                     cell.value = new_val;
                     cell.status = CellStatus::Ok;
                 }
