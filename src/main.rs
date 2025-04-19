@@ -1,18 +1,19 @@
-#![allow(warnings)]
+#![allow(warnings)] // Keep if needed
 mod parser;
 mod sheet;
 
-use parser::*;
-use sheet::*;
+use crate::sheet::cell_name_to_coords; // Ensure this function is accessible [1, 3]
+use parser::*; // Assuming parser has necessary items [2]
+use sheet::*; // Assuming sheet has Spreadsheet, CellStatus, get_cell_history [1]
 use std::env;
 use std::io::{self, Write};
 use std::time::Instant;
-use std::time::Duration;
+// Remove: use std::time::Duration; - Not directly used in this modification
 
-// Global variable as in C (check)
-static mut CHECK: bool = false;
+// Global variable as in C (check) - This is generally discouraged in Rust
+// static mut CHECK: bool = false;
 
-// Converts a 0-indexed column number into its corresponding letter string.
+// Converts a 0-indexed column number into its corresponding letter string. [3]
 fn col_to_letters(mut col: i32) -> String {
     let mut buf = Vec::new();
     loop {
@@ -26,7 +27,7 @@ fn col_to_letters(mut col: i32) -> String {
     buf.into_iter().collect()
 }
 
-// Clamps vertical viewport.
+// Clamps vertical viewport. [3]
 fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
     if *start_row > total_rows {
         *start_row -= 10;
@@ -37,7 +38,7 @@ fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
     }
 }
 
-// Clamps horizontal viewport.
+// Clamps horizontal viewport. [3]
 fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
     if *start_col > total_cols {
         *start_col -= 10;
@@ -48,7 +49,8 @@ fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
     }
 }
 
-// Displays the grid (viewport 10x10).
+// Displays the grid (viewport 10x10). [3]
+// Note: Does not use sheet.output_enabled, display_grid_from does
 fn display_grid(sheet: &Spreadsheet) {
     let start_row = sheet.top_row;
     let start_col = sheet.left_col;
@@ -74,30 +76,30 @@ fn display_grid(sheet: &Spreadsheet) {
         print!("{:<4} ", r + 1);
         for c in start_col..end_col {
             // Get cell value from the sparse representation
-            let status = sheet.get_cell_status(r, c);
-            if status == CellStatus::Error {
+            let status = sheet.get_cell_status(r, c); // [1]
+            if status == CellStatus::Error { // [1]
                 print!("{:<12}", "ERR");
             } else {
-                print!("{:<12}", sheet.get_cell_value(r, c));
+                print!("{:<12}", sheet.get_cell_value(r, c)); // [1]
             }
         }
         println!();
     }
 }
 
-// Displays grid from a specified start.
+// Displays grid from a specified start. [3]
 fn display_grid_from(sheet: &Spreadsheet, start_row: i32, start_col: i32) {
     // Calculate max displayable rows/columns
     let mut max_col = start_col + 10;
     if max_col > sheet.total_cols {
         max_col = sheet.total_cols;
     }
-    
+
     let mut max_row = start_row + 10;
     if max_row > sheet.total_rows {
         max_row = sheet.total_rows;
     }
-    
+
     // Always print at least column headers
     print!("     ");
     for c in start_col..max_col {
@@ -111,84 +113,181 @@ fn display_grid_from(sheet: &Spreadsheet, start_row: i32, start_col: i32) {
         if r < 0 || r >= sheet.total_rows {
             continue;
         }
-        
+
         print!("{:<4} ", r + 1);
         for c in start_col..max_col {
             if c < 0 || c >= sheet.total_cols {
                 print!("{:<12}", "--");
                 continue;
             }
-            
+
             // Get cell value from the sparse representation
-            let status = sheet.get_cell_status(r, c);
-            if status == CellStatus::Error {
+            let status = sheet.get_cell_status(r, c); // [1]
+            if status == CellStatus::Error { // [1]
                 print!("{:<12}", "ERR");
             } else {
-                print!("{:<12}", sheet.get_cell_value(r, c));
+                print!("{:<12}", sheet.get_cell_value(r, c)); // [1]
             }
         }
         println!();
     }
 }
 
-// Process commands: scrolling, cell assignment, output control.
+// Process commands: scrolling, cell assignment, output control. [3]
 fn process_command(sheet: &mut Spreadsheet, cmd: &str, status_msg: &mut String) {
-    if cmd == "w" {
+    status_msg.clear(); // Clear previous status at the start
+    let cmd_lower = cmd.to_lowercase(); // Use lowercase for command matching
+
+    if cmd_lower == "w" {
         sheet.top_row -= 10;
         clamp_viewport_ve(sheet.total_rows, &mut sheet.top_row);
-    } else if cmd == "s" {
+        status_msg.push_str("ok");
+    } else if cmd_lower == "s" {
         sheet.top_row += 10;
         clamp_viewport_ve(sheet.total_rows, &mut sheet.top_row);
-    } else if cmd == "a" {
+        status_msg.push_str("ok");
+    } else if cmd_lower == "a" {
         sheet.left_col -= 10;
         clamp_viewport_hz(sheet.total_cols, &mut sheet.left_col);
-    } else if cmd == "d" {
+        status_msg.push_str("ok");
+    } else if cmd_lower == "d" {
         sheet.left_col += 10;
         clamp_viewport_hz(sheet.total_cols, &mut sheet.left_col);
-    } else if cmd.starts_with("scroll_to") {
+        status_msg.push_str("ok");
+    } else if cmd_lower.starts_with("scroll_to") {
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.len() == 2 {
             let cell_name = parts[1];
-            if let Some((row, col)) = cell_name_to_coords(cell_name) {
+            if let Some((row, col)) = cell_name_to_coords(cell_name) { // [1, 3]
                 if row < 0 || row >= sheet.total_rows || col < 0 || col >= sheet.total_cols {
-                    *status_msg = "Cell reference out of bounds".to_string();
+                    status_msg.push_str("Cell reference out of bounds");
                 } else {
                     sheet.top_row = row;
                     sheet.left_col = col;
+                    status_msg.push_str("ok");
                 }
             } else {
-                *status_msg = "Invalid cell".to_string();
+                status_msg.push_str("Invalid cell");
             }
         } else {
-            *status_msg = "Invalid command".to_string();
+            status_msg.push_str("Usage: scroll_to <CellReference>");
         }
-    } else if cmd == "disable_output" {
+    } else if cmd_lower == "disable_output" {
         sheet.output_enabled = false;
-    } else if cmd == "enable_output" {
+        status_msg.push_str("Output disabled");
+    } else if cmd_lower == "enable_output" {
         sheet.output_enabled = true;
-    } else if cmd == "clear_cache" {
-        // Clear both sheet cache and parser cache
-        sheet.cache.clear();
-        sheet.dirty_cells.clear();
-        parser::clear_range_cache();
-        *status_msg = "Cache cleared".to_string();
-    } else if cmd.contains('=') {
-        if let Some(eq_pos) = cmd.find('=') {
-            let cell_name = &cmd[..eq_pos];
-            let expr = &cmd[eq_pos + 1..];
-            if let Some((row, col)) = cell_name_to_coords(cell_name) {
+        status_msg.push_str("Output enabled");
+        // Need to display grid here if output was previously off
+        sheet.skip_default_display = false; // Ensure next loop iteration displays
+    } else if cmd_lower == "clear_cache" {
+        sheet.cache.clear(); // [1]
+        sheet.dirty_cells.clear(); // [1]
+        parser::clear_range_cache(); // [2]
+        status_msg.push_str("Cache cleared");
+
+    // --- Add history command handling ---
+    } else if cmd_lower.starts_with("history") {
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.len() == 2 {
+            let cell_ref = parts[1];
+            if let Some((row, col)) = cell_name_to_coords(cell_ref) { // [1, 3]
                 if row < 0 || row >= sheet.total_rows || col < 0 || col >= sheet.total_cols {
-                    *status_msg = "Cell out of bounds".to_string();
+                     status_msg.push_str(&format!("Cell {} out of bounds", cell_ref.to_uppercase()));
                 } else {
-                    // Call update_cell_formula.
+                    // --- Feature Check ---
+                    #[cfg(feature = "cell_history")] // [4]
+                    {
+                        // Assuming get_cell_history exists in Spreadsheet impl [1]
+                        match sheet.get_cell_history(row, col) {
+                            Some(history) if !history.is_empty() => {
+                                // Print directly instead of using status_msg due to potential length
+                                println!("History for {}:", cell_ref.to_uppercase());
+                                // Print oldest first (index 1)
+                                for (i, val) in history.iter().enumerate() {
+                                    println!("  {}: {}", i + 1, val);
+                                }
+                                let current_val = sheet.get_cell_value(row, col);
+                                println!("  Current: {}", current_val);
+                                status_msg.push_str("History displayed"); // Set status message
+                            }
+                            _ => { // Cell exists but has no history, or cell doesn't exist yet
+                                status_msg.push_str(&format!("No recorded history for {}", cell_ref.to_uppercase()));
+                            }
+                        }
+                         sheet.skip_default_display = true; // Don't redisplay grid after history
+                    }
+                    #[cfg(not(feature = "cell_history"))] // [4]
+                    {
+                         status_msg.push_str("Cell history feature is not enabled.");
+                         // sheet.skip_default_display = true; // Prevent grid redraw
+                    }
+                    // --- End Feature Check ---
+                }
+            } else {
+                status_msg.push_str(&format!("Invalid cell reference: {}", cell_ref));
+            }
+        } else {
+            status_msg.push_str("Usage: history <CellReference>");
+        }
+    // --- End history command handling ---
+
+    // --- Add undo/redo command handling ---
+     } else if cmd_lower == "undo" {
+          // --- Feature Check ---
+         #[cfg(feature = "undo_state")] // [6, 8, 9]
+         {
+             sheet.undo(status_msg); // Call the undo method [1]
+             // status_msg is set within the undo method
+         }
+         #[cfg(not(feature = "undo_state"))] // [6, 8, 9]
+         {
+             status_msg.push_str("Undo feature is not enabled.");
+         }
+         // --- End Feature Check ---
+     } else if cmd_lower == "redo" {
+          // --- Feature Check ---
+          #[cfg(feature = "undo_state")] // <-- Update feature name [1, 3]
+          {
+              sheet.redo(status_msg); // Call the redo method (sets status_msg) [1]
+          }
+          #[cfg(not(feature = "undo_state"))] // <-- Update feature name [1, 3]
+          {
+              status_msg.push_str("Undo/Redo feature is not enabled.");
+          }
+          // --- End Feature Check ---
+     // --- End undo/redo command handling ---
+
+
+    } else if cmd.contains('=') {
+        // Make case-insensitive for cell name part? Assume original case sensitivity for now.
+        if let Some(eq_pos) = cmd.find('=') {
+            let cell_name = cmd[..eq_pos].trim(); // Trim spaces around cell name
+            let expr = cmd[eq_pos + 1..].trim(); // Trim spaces around expression
+            if let Some((row, col)) = cell_name_to_coords(cell_name) { // [1, 3]
+                if row < 0 || row >= sheet.total_rows || col < 0 || col >= sheet.total_cols {
+                    status_msg.push_str("Cell out of bounds");
+                } else {
+                    // Call update_cell_formula. It sets status_msg internally. [1]
                     sheet.update_cell_formula(row, col, expr, status_msg);
                 }
             } else {
-                *status_msg = "Invalid cell".to_string();
+                status_msg.push_str("Invalid cell reference");
             }
+        } else {
+             // Should not happen if '=' is present, but handle defensively
+             status_msg.push_str("Invalid assignment format");
         }
+    } else if !cmd.is_empty() { // Only flag non-empty unrecognized commands
+        status_msg.push_str("Unrecognized command");
     } else {
-        *status_msg = "unrecognized cmd".to_string();
+        // Empty input, just redisplay prompt with "ok"
+        status_msg.push_str("ok");
+    }
+
+    // If status_msg wasn't set by any branch, default to "ok" (unless empty input)
+    if status_msg.is_empty() && !cmd.is_empty() {
+        status_msg.push_str("ok");
     }
 }
 
@@ -198,47 +297,72 @@ fn main() {
         eprintln!("Usage: {} <rows> <cols>", args[0]);
         return;
     }
-    let rows: i32 = args[1].parse().unwrap_or(0);
-    let cols: i32 = args[2].parse().unwrap_or(0);
+    // Use expect for more direct error handling on parse failure
+    let rows: i32 = args[1].parse().expect("Invalid number of rows");
+    let cols: i32 = args[2].parse().expect("Invalid number of columns");
+
     if rows < 1 || cols < 1 {
-        eprintln!("Invalid dimensions.");
+        eprintln!("Rows and columns must be positive numbers.");
         return;
     }
+
     let mut cmd = String::new();
-    let mut status_msg = String::from("ok");
-    let mut elapsed_time = 0.0;
+    // Initialize status_msg for the first prompt
+    let mut status_msg = String::from("Ready");
+    let mut elapsed_time; // No need to initialize here
 
-    // Allocate the spreadsheet on the heap.
-    let mut sheet = Box::new(Spreadsheet::new(rows, cols));
-    println!("Boxed sheet at address {:p}, rows={}, cols={}", &*sheet, sheet.total_rows, sheet.total_cols);
+    // Allocate the spreadsheet on the heap. [3]
+    let mut sheet = Spreadsheet::new(rows, cols); // [1]
+    println!(
+        "Spreadsheet created: {} rows, {} columns",
+        sheet.total_rows, sheet.total_cols
+    );
 
 
-    display_grid(&sheet);
-    print!("[{:.1}] ({}) > ", elapsed_time, status_msg);
+    // Initial display
+    if sheet.output_enabled {
+        display_grid(&sheet);
+    }
+    print!("[0.0] ({}) > ", status_msg); // Show initial status
     io::stdout().flush().unwrap();
 
     loop {
         cmd.clear();
-        if io::stdin().read_line(&mut cmd).is_err() {
-            status_msg = "Invalid command".to_string();
+        match io::stdin().read_line(&mut cmd) {
+            Ok(0) => break, // EOF reached
+            Ok(_) => { /* Line read successfully */ }
+            Err(e) => {
+                eprintln!("Error reading input: {}", e);
+                break; // Exit on input error
+            }
         }
-        let cmd = cmd.trim();
-        if cmd == "q" {
+
+        let cmd_trimmed = cmd.trim(); // Use trimmed version for processing
+        if cmd_trimmed.eq_ignore_ascii_case("q") { // Case-insensitive quit
             break;
         }
-        let start = Instant::now();
-        // Pass a mutable reference to the spreadsheet.
-        process_command(&mut *sheet, cmd, &mut status_msg);
-        let duration = start.elapsed();
-        elapsed_time = duration.as_secs_f64();
 
-        if sheet.output_enabled && cmd != "enable_output" {
+        // Reset status message for the new command processing
+        status_msg.clear();
+        sheet.skip_default_display = false; // Reset display skip flag
+
+        let start = Instant::now();
+        // Pass a mutable reference to the spreadsheet. [3]
+        process_command(&mut sheet, cmd_trimmed, &mut status_msg);
+        let duration = start.elapsed();
+        // Display time in milliseconds for potentially faster operations
+        elapsed_time = duration.as_secs_f64() * 1000.0;
+
+        // Display grid unless output is off or command suppressed it
+        if sheet.output_enabled && !sheet.skip_default_display {
+            // Use display_grid_from for consistent viewport handling
             display_grid_from(&sheet, sheet.top_row, sheet.left_col);
         }
-        
+
+        // Print prompt
         print!("[{:.1}] ({}) > ", elapsed_time, status_msg);
         io::stdout().flush().unwrap();
-        status_msg = "ok".to_string();
     }
-}
 
+    println!("\nExiting.");
+}
