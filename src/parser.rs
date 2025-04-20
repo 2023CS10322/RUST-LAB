@@ -2,8 +2,29 @@ use crate::sheet::{CellStatus, Spreadsheet, CloneableSheet, CachedRange};
 use std::thread::sleep;
 use std::time::Duration;
 use std::collections::{HashMap, HashSet};
+use crate::sheet::cell_name_to_coords;
 
 // Define the AST node enum for formula parsing
+pub enum Value {
+    Number(f64),
+    Text(String),
+    Bool(bool),
+    Error(String),
+}
+
+impl Value {
+    pub fn as_number(&self) -> Option<f64> {
+        if let Value::Number(n) = self { Some(*n) } else { None }
+    }
+    pub fn as_bool(&self) -> Option<bool> {
+        if let Value::Bool(b) = self { Some(*b) } else { None }
+    }
+    pub fn as_text(&self) -> Option<&str> {
+        if let Value::Text(s) = self { Some(s) } else { None }
+    }
+}
+
+
 #[derive(Clone, Debug)]
 enum ASTNode {
     Literal(i32),
@@ -256,27 +277,79 @@ fn evaluate_large_range<'a>(
     result
 }
 
-fn parse_expr<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
-    let mut result = parse_term(sheet, input, cur_row, cur_col, error);
+fn parse_expr<'a>(
+    sheet: &CloneableSheet<'a>,
+    input: &mut &str,
+    cur_row: i32,
+    cur_col: i32,
+    error: &mut i32,
+) -> i32 {
+    // 1) Parse the initial term.
+    let mut value = parse_term(sheet, input, cur_row, cur_col, error);
     if *error != 0 { return 0; }
     skip_spaces(input);
-    while input.starts_with('+') || input.starts_with('-') {
-        let op = input.chars().next().unwrap();
+
+    // 2) Optional comparison operators.
+    if input.starts_with(">=") {
+        *input = &input[2..]; skip_spaces(input);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        value = if value >= rhs { 1 } else { 0 };
+        skip_spaces(input);
+    }
+    else if input.starts_with(">") {
+        *input = &input[1..]; skip_spaces(input);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        value = if value > rhs { 1 } else { 0 };
+        skip_spaces(input);
+    }
+    else if input.starts_with("<=") {
+        *input = &input[2..]; skip_spaces(input);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        value = if value <= rhs { 1 } else { 0 };
+        skip_spaces(input);
+    }
+    else if input.starts_with("<") {
+        *input = &input[1..]; skip_spaces(input);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        value = if value < rhs { 1 } else { 0 };
+        skip_spaces(input);
+    }
+    else if input.starts_with("==") {
+        *input = &input[2..]; skip_spaces(input);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        value = if value == rhs { 1 } else { 0 };
+        skip_spaces(input);
+    }
+
+    // 3) Then handle addition and subtraction.
+    while let Some(op) = input.chars().next() {
+        if op != '+' && op != '-' { break; }
         *input = &input[1..];
         skip_spaces(input);
-        let term_value = parse_term(sheet, input, cur_row, cur_col, error);
+        let rhs = parse_term(sheet, input, cur_row, cur_col, error);
         if *error != 0 { return 0; }
-        if op == '+' { result += term_value; } else { result -= term_value; }
+        if op == '+' { value += rhs } else { value -= rhs }
         skip_spaces(input);
     }
+
+    // 4) Finally, allow ')' or ',' (for IF) or whitespace/end without error.
     skip_spaces(input);
-    if !input.is_empty() && !input.starts_with(')') {
-        if !input.chars().all(|ch| ch.is_whitespace()) {
-            *error = 1;
+    if !input.is_empty() {
+        match input.chars().next().unwrap() {
+            ')' | ','           => { /* OK */ }
+            ch if ch.is_whitespace() => { /* OK */ }
+            _                   => *error = 1,
         }
     }
-    result
+
+    value
 }
+
 
 fn parse_term<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
     let mut value = parse_factor(sheet, input, cur_row, cur_col, error);
@@ -297,6 +370,20 @@ fn parse_term<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cu
         skip_spaces(input);
     }
     value
+}
+
+fn parse_range_bounds(s: &str, error: &mut i32) -> Option<(i32,i32,i32,i32)> {
+    if let Some(colon) = s.find(':') {
+        let a = &s[..colon];
+        let b = &s[colon+1..];
+        if let (Some((r1,c1)), Some((r2,c2))) =
+            (cell_name_to_coords(a), cell_name_to_coords(b))
+        {
+            return Some((r1,c1,r2,c2));
+        }
+    }
+    *error = 1;
+    None
 }
 
 fn parse_factor<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, cur_col: i32, error: &mut i32) -> i32 {
@@ -321,7 +408,231 @@ fn parse_factor<'a>(sheet: &CloneableSheet<'a>, input: &mut &str, cur_row: i32, 
         if input.starts_with('(') {
             *input = &input[1..]; // Skip '('
             skip_spaces(input);
-            if token == "SLEEP" {
+            
+            if token == "IF" {
+                let cond = parse_expr(sheet, input, cur_row, cur_col, error);
+                if *error != 0 { return 0; }
+                skip_spaces(input);
+                if !input.starts_with(',') { *error = 1; return 0; }
+                *input = &input[1..]; skip_spaces(input);
+
+                let tv = parse_expr(sheet, input, cur_row, cur_col, error);
+                if *error != 0 { return 0; }
+                skip_spaces(input);
+                if !input.starts_with(',') { *error = 1; return 0; }
+                *input = &input[1..]; skip_spaces(input);
+
+                let fv = parse_expr(sheet, input, cur_row, cur_col, error);
+                if *error != 0 { return 0; }
+                skip_spaces(input);
+                if input.starts_with(')') { *input = &input[1..]; }
+
+                return if cond != 0 { tv } else { fv };
+            }
+
+            // COUNTIF(range, condition)
+            else if token == "COUNTIF" {
+                let close = input.find(')').unwrap_or(input.len());
+    // extract the raw args string, then advance input
+    let args = &input[..close];
+    *input = &input[close..];
+
+    // split into range and criterion
+    let parts: Vec<&str> = args.splitn(2, ',').map(str::trim).collect();
+    if parts.len() != 2 { *error = 1; return 0; }
+
+    // parse the range bounds A1:B2
+    let (r1, c1, r2, c2) = match parse_range_bounds(parts[0], error) {
+        Some(b) => b,
+        None => return 0,
+    };
+
+    let mut count = 0;
+    // decide if criterion is a quoted comparison or a simple numeric equality
+    let crit = parts[1];
+    let (op, threshold) = if crit.starts_with('"') && crit.ends_with('"') {
+        // strip quotes
+        let inner = &crit[1..crit.len()-1];
+        // find operator prefix
+        let ops = [">=", "<=", "<>", ">", "<", "="]; // <> for not equal
+        let mut found = None;
+        for &candidate in &ops {
+            if inner.starts_with(candidate) {
+                if let Ok(val) = inner[candidate.len()..].trim().parse::<i32>() {
+                    found = Some((candidate, val));
+                }
+                break;
+            }
+        }
+        match found {
+            Some(f) => f,
+            None => { *error = 1; return 0; }
+        }
+    } else {
+        // default: numeric equality
+        // parse once
+        let mut crit_s = crit;
+        let val = parse_expr(sheet, &mut crit_s, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        // treat as "=val"
+        ("=", val)
+    };
+
+    // iterate cells
+    for rr in r1..=r2 {
+        for cc in c1..=c2 {
+            if let Some(cell) = sheet.get_cell(rr, cc) {
+                if cell.status == CellStatus::Error {
+                    *error = 3; return 0;
+                }
+                let v = cell.value;
+                let m = match op {
+                    ">" => v > threshold,
+                    ">=" => v >= threshold,
+                    "<" => v < threshold,
+                    "<=" => v <= threshold,
+                    "=" => v == threshold,
+                    "<>" => v != threshold,
+                    _ => false,
+                };
+                if m { count += 1; }
+            }
+        }
+    }
+    if input.starts_with(')') { *input = &input[1..]; }
+    return count;
+            }
+
+            // SUMIF(range, condition, sum_range)
+            // SUMIF(range, criterion, sum_range)
+// Inside parse_factor, after matching token == "SUMIF":
+else if token == "SUMIF" {
+    // Grab everything up to the closing ')'
+    let close = input.find(')').unwrap_or(input.len());
+    let args = &input[..close];
+    *input = &input[close..];
+
+    // Split into exactly three comma‑separated parts
+    let parts: Vec<&str> = args.splitn(3, ',').map(str::trim).collect();
+    if parts.len() != 3 {
+        *error = 1;
+        return 0;
+    }
+
+    // 1) parse the test range A1:B2 → (r1,c1,r2,c2)
+    let (r1, c1, r2, c2) = match parse_range_bounds(parts[0], error) {
+        Some(b) => b,
+        None    => return 0,
+    };
+    // 2) parse the sum range  C1:D2 → (s1,t1,s2,t2)
+    let (s1, t1, s2, t2) = match parse_range_bounds(parts[2], error) {
+        Some(b) => b,
+        None    => return 0,
+    };
+
+    // ── REQUIRE IDENTICAL DIMENSIONS ──
+    let rows_test = r2 - r1;
+    let cols_test = c2 - c1;
+    let rows_sum  = s2 - s1;
+    let cols_sum  = t2 - t1;
+    if rows_test != rows_sum || cols_test != cols_sum {
+        *error = 1;
+        return 0;
+    }
+
+    // 3) parse the criterion, either quoted >5 style or plain numeric
+    let crit = parts[1];
+    let (op, threshold) = if crit.starts_with('\"') && crit.ends_with('\"') {
+        // strip the quotes and detect operator
+        let inner = &crit[1..crit.len()-1];
+        let ops = [">=", "<=", "<>", ">", "<", "="];
+        let mut found = None;
+        for &candidate in &ops {
+            if inner.starts_with(candidate) {
+                if let Ok(val) = inner[candidate.len()..].trim().parse::<i32>() {
+                    found = Some((candidate, val));
+                }
+                break;
+            }
+        }
+        match found {
+            Some(f) => f,
+            None    => { *error = 1; return 0; }
+        }
+    } else {
+        // one‑time numeric equality
+        let mut crit_s = crit;
+        let val = parse_expr(sheet, &mut crit_s, cur_row, cur_col, error);
+        if *error != 0 { return 0; }
+        ("=", val)
+    };
+
+    // 4) loop over every cell in the test range and sum matching cells
+    let mut total = 0;
+    for dr in 0..=rows_test {
+        for dc in 0..=cols_test {
+            let rr = r1 + dr;
+            let cc = c1 + dc;
+            if let Some(cell) = sheet.get_cell(rr, cc) {
+                if cell.status == CellStatus::Error {
+                    *error = 3;
+                    return 0;
+                }
+                let v = cell.value;
+                let keep = match op {
+                    ">"  => v >  threshold,
+                    ">=" => v >= threshold,
+                    "<"  => v <  threshold,
+                    "<=" => v <= threshold,
+                    "="  => v == threshold,
+                    "<>" => v != threshold,
+                    _    => false,
+                };
+                if keep {
+                    // same offset into sum_range
+                    let sr = s1 + dr;
+                    let sc = t1 + dc;
+                    if let Some(sumc) = sheet.get_cell(sr, sc) {
+                        if sumc.status == CellStatus::Error {
+                            *error = 3;
+                            return 0;
+                        }
+                        total += sumc.value;
+                    }
+                }
+            }
+        }
+    }
+
+    // consume the closing ')'
+    if input.starts_with(')') {
+        *input = &input[1..];
+    }
+    return total;
+}
+
+           
+            // ROUND(value, digits)
+            else if token == "ROUND" {
+                let close = input.find(')').unwrap_or(input.len());
+                let args = &input[..close];
+                *input = &input[close..];
+                let parts: Vec<&str> = args.splitn(2, ',').map(str::trim).collect();
+                if parts.len() != 2 { *error = 1; return 0; }
+                let mut s0 = parts[0]; let mut s1 = parts[1];
+                let val = parse_expr(sheet, &mut s0, cur_row, cur_col, error);
+                if *error != 0 { return 0; }
+                let digs = parse_expr(sheet, &mut s1, cur_row, cur_col, error);
+                if *error != 0 { return 0; }
+         // NEW: drop last 'digs' digits
+                let factor = 10_i32.pow(digs as u32);
+                let truncated = val / factor;
+                if input.starts_with(')') { *input = &input[1..]; }
+                return truncated;
+            }
+
+            
+            else if token == "SLEEP" {
                 let sleep_time = parse_expr(sheet, input, cur_row, cur_col, error);
                 if *error != 0 { return 0; }
                 skip_spaces(input);
