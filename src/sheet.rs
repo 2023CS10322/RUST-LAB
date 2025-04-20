@@ -102,6 +102,7 @@ impl Spreadsheet {
         self.cells.get_mut(&(row, col)).unwrap()
     }
 
+    
     // Helper method to get cell value (returns 0 for non-existent cells)
     pub fn get_cell_value(&self, row: i32, col: i32) -> i32 {
         self.cells.get(&(row, col)).map_or(0, |cell| cell.value)
@@ -338,6 +339,34 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
     if formula.trim().parse::<i32>().is_ok() {
         return 0;
     }
+        // ── NEW ── Advanced formulas
+        if formula.starts_with("IF(") {
+            // must have two commas and closing ')'
+            let inner = &formula[3..formula.len().saturating_sub(1)];
+            if inner.split(',').count() != 3 { status_msg.push_str("IF needs 3 args"); return 1; }
+            return 0;
+        }
+        if formula.starts_with("COUNTIF(") {
+            let inner = &formula[8..formula.len().saturating_sub(1)];
+            if inner.split(',').count() != 2 { status_msg.push_str("COUNTIF needs 2 args"); return 1; }
+            return 0;
+        }
+        if formula.starts_with("SUMIF(") {
+            let inner = &formula[6..formula.len().saturating_sub(1)];
+            if inner.split(',').count() != 3 { status_msg.push_str("SUMIF needs 3 args"); return 1; }
+            return 0;
+        }
+        if formula.starts_with("CONCATENATE(") {
+            let inner = &formula[12..formula.len().saturating_sub(1)];
+            if inner.split(',').count() < 1 { status_msg.push_str("CONCATENATE needs ≥1 arg"); return 1; }
+            return 0;
+        }
+        if formula.starts_with("ROUND(") {
+            let inner = &formula[6..formula.len().saturating_sub(1)];
+            if inner.split(',').count() != 2 { status_msg.push_str("ROUND needs 2 args"); return 1; }
+            return 0;
+        }
+    
     if formula.starts_with("MAX(") || formula.starts_with("MIN(") ||
        formula.starts_with("SUM(") || formula.starts_with("AVG(") ||
        formula.starts_with("STDEV(")
