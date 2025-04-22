@@ -306,23 +306,42 @@ mod cli_app {
 
         loop {
             cmd.clear();
-            if io::stdin().read_line(&mut cmd).is_err() {
-                status_msg = "Invalid command".to_string();
+            // 1) Read a line, bail out on EOF
+            let bytes = match io::stdin().read_line(&mut cmd) {
+                Ok(n) => n,
+                Err(_) => 0,
+            };
+            if bytes == 0 {
+                // EOF
+                break;
             }
+        
             let cmd = cmd.trim();
+            // explicit quit
             if cmd == "q" {
                 break;
             }
+        
+            // 2) Only treat it as a real command if it matches one of your patterns
+            let is_scroll = matches!(cmd, "w" | "a" | "s" | "d");
+            let is_jump   = cmd.starts_with("scroll_to ");
+            let is_toggle = cmd == "enable_output" || cmd == "disable_output";
+            let is_cache  = cmd == "clear_cache";
+            let is_assign = cmd.contains('=');  // crude but works for A1=3, etc.
+        
+            if !(is_scroll || is_jump || is_toggle || is_cache || is_assign) {
+                // garbage (a stray char), skip it
+                continue;
+            }
+        
+            // at this point it’s a real, supported command → process & display
             let start = Instant::now();
-            // Pass a mutable reference to the spreadsheet.
             process_command(&mut *sheet, cmd, &mut status_msg);
-            let duration = start.elapsed();
-            elapsed_time = duration.as_secs_f64();
-
-            if sheet.output_enabled && cmd != "enable_output" && !cmd.contains("history") {
+            elapsed_time = start.elapsed().as_secs_f64();
+        
+            if sheet.output_enabled {
                 display_grid_from(&sheet, sheet.top_row, sheet.left_col);
             }
-
             print!("[{:.1}] ({}) > ", elapsed_time, status_msg);
             io::stdout().flush().unwrap();
             status_msg = "ok".to_string();
