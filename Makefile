@@ -13,7 +13,7 @@ $(TARGET):
 	$(CARGO) build --release
 
 # Test target: run all tests.
-test:
+test:a
 	$(CARGO) test
 
 # Report target: generate report.pdf from the LaTeX source.
