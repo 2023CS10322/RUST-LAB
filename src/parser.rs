@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use crate::sheet::cell_name_to_coords;
 use crate::sheet::{CachedRange, CellStatus, CloneableSheet, Spreadsheet};
 use std::collections::{HashMap, HashSet};

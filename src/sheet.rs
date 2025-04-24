@@ -1,3 +1,4 @@
+#![allow(warnings)]
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -131,7 +132,7 @@ impl Spreadsheet {
     // --- Additions for Undo State ---
     // --- Helper to capture state (used by undo and redo) ---
     #[cfg(feature = "undo_state")] // <-- Update feature name
-    fn capture_current_cell_state(&self, row: i32, col: i32) -> PreviousCellState {
+    pub fn capture_current_cell_state(&self, row: i32, col: i32) -> PreviousCellState {
         // This is essentially the same as capture_previous_state,
         // but the name clarifies its use in undo/redo logic.
         if let Some(cell) = self.cells.get(&(row, col)) {
@@ -161,7 +162,7 @@ impl Spreadsheet {
     // --- End Helper ---
 
     // Helper method to get or create a cell
-    fn get_or_create_cell(&mut self, row: i32, col: i32) -> &mut Cell {
+    pub fn get_or_create_cell(&mut self, row: i32, col: i32) -> &mut Cell {
         if !self.cells.contains_key(&(row, col)) {
             self.cells.insert(
                 (row, col),
@@ -203,7 +204,7 @@ impl Spreadsheet {
     }
 
     // Helper to update cell value and potentially its history
-    fn update_cell_value(&mut self, row: i32, col: i32, new_value: i32, new_status: CellStatus) {
+    pub fn update_cell_value(&mut self, row: i32, col: i32, new_value: i32, new_status: CellStatus) {
         let cell = self.get_or_create_cell(row, col);
 
         // --- Additions for Cell History ---
@@ -469,7 +470,7 @@ impl Spreadsheet {
     }
     // --- Apply a captured state (Helper for Undo/Redo) ---
     #[cfg(feature = "undo_state")] // <-- Update feature name
-    fn apply_state(&mut self, state_to_apply: &PreviousCellState, status_msg: &mut String) {
+    pub fn apply_state(&mut self, state_to_apply: &PreviousCellState, status_msg: &mut String) {
         let row = state_to_apply.row;
         let col = state_to_apply.col;
 
@@ -996,7 +997,7 @@ pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
 }
 
 // More efficient dependency graph building for large chains
-fn build_dependency_graph(
+pub fn build_dependency_graph(
     sheet: &Spreadsheet,
     row: i32,
     col: i32,
@@ -1132,7 +1133,7 @@ pub fn extract_dependencies_without_self(
 }
 
 // // Optimized extraction for large ranges
-// fn extract_range_dependencies_optimized(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
+// pub fn extract_range_dependencies_optimized(formula: &str, total_rows: i32, total_cols: i32) -> HashSet<(i32, i32)> {
 //     let mut deps = HashSet::new();
 
 //     // Fast path for range functions

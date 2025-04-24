@@ -1,10 +1,13 @@
 #![allow(warnings)]
-mod parser;
-mod sheet;
+
+use spreadsheet::parser;
+use spreadsheet::sheet;
+
 #[cfg(feature = "cli_app")]
-mod cli_app {
-    use crate::parser::*; // Correct path
-    use crate::sheet::*; // Correct path
+pub mod cli_app {
+    // Use crate's modules
+    use crate::parser::*;
+    use crate::sheet::*;
     use std::env;
     use std::io::{self, Write};
     use std::time::Duration;
