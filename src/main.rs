@@ -482,7 +482,7 @@ struct MyApp {
 // --- MyApp Implementation ---
 impl MyApp {
     fn new(cc: &eframe::CreationContext<'_>, rows: i32, cols: i32) -> Self {
-        egui::Context::set_visuals(&cc.egui_ctx, egui::Visuals::light());
+        egui::Context::set_visuals(&cc.egui_ctx, egui::Visuals::dark());
 
         // Spreadsheet::new returns Box<Spreadsheet> [1]
         let mut sheet = Spreadsheet::new(rows, cols);
