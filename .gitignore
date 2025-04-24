@@ -1,0 +1,29 @@
+# Build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+*.code-workspace
+.DS_Store
+*.swp
+*.swo
+
+# Environment variables
+.env
+.env.local
+
+# Debug logs
+*.log
+*.out
+
+# Profiling data
+perf.data
+perf.data.old
+flamegraph.svg
+callgrind.out.*
+cachegrind.out.*
+

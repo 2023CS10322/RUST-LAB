@@ -1,0 +1,39 @@
+[package]
+name = "spreadsheet"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+chrono = { version = "0.4", features = ["clock"] }
+eframe = { version = "0.27", optional = true } # Replace "0.27" with your actual version
+egui_plot = { version = "0.27", optional = true } # Replace "0.27" with your actual version
+linreg = {version="0.2.0",optional = true} # Or check for the latest version
+egui_extras = { version = "0.27.2", optional=true }
+[features]
+# Default feature: enables only the basic CLI app
+default = ["cli_app"]
+
+# Feature for the base Command Line Interface application
+cli_app = []
+
+# Feature for the GUI application using eframe
+gui_app = [
+    # Enable the optional dependencies when gui_app is active
+    "dep:eframe",
+    "dep:egui_plot",
+    "dep:linreg",
+    "dep:egui_extras",
+]
+
+# Individual optional features
+advanced_formulas = []
+cell_history = []
+undo_state = []
+
+# NEW: Meta-feature to enable CLI with all optional features
+cli_full = [
+    "cli_app",            # Ensure the base CLI is included
+    "advanced_formulas",
+    "cell_history",
+    "undo_state",
+]
