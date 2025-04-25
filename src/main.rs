@@ -9,7 +9,7 @@
 //! //! # spreadsheet
 //!
 //! A tiny, embeddable spreadsheet engine in pure Rust.
-//! 
+//!
 //! ## Features
 //! - Sparse storage
 //! - Formula evaluation (`SUM`, `IF`, `COUNTIF`, …)
@@ -58,24 +58,24 @@ pub mod cli_app {
     /// This function is used to convert cell names to their corresponding  
     // Clamps vertical viewport.
     // at the top of cli_app.rs, make sure these match your viewport dims:
-const VIEWPORT_WIDTH: i32 = 10;
-const VIEWPORT_HEIGHT: i32 = 10;
+    const VIEWPORT_WIDTH: i32 = 10;
+    const VIEWPORT_HEIGHT: i32 = 10;
 
-pub fn clamp_viewport_hz(max_col: i32, start_col: &mut i32) {
-    if *start_col < 0 {
-        *start_col = 0;
-    } else if *start_col > max_col - VIEWPORT_WIDTH {
-        *start_col = max_col - VIEWPORT_WIDTH;
+    pub fn clamp_viewport_hz(max_col: i32, start_col: &mut i32) {
+        if *start_col < 0 {
+            *start_col = 0;
+        } else if *start_col > max_col - VIEWPORT_WIDTH {
+            *start_col = max_col - VIEWPORT_WIDTH;
+        }
     }
-}
 
-pub fn clamp_viewport_ve(max_row: i32, start_row: &mut i32) {
-    if *start_row < 0 {
-        *start_row = 0;
-    } else if *start_row > max_row - VIEWPORT_HEIGHT {
-        *start_row = max_row - VIEWPORT_HEIGHT;
+    pub fn clamp_viewport_ve(max_row: i32, start_row: &mut i32) {
+        if *start_row < 0 {
+            *start_row = 0;
+        } else if *start_row > max_row - VIEWPORT_HEIGHT {
+            *start_row = max_row - VIEWPORT_HEIGHT;
+        }
     }
-}
 
     /// Render the current 10×10 window of `sheet` to stdout,
     /// printing row numbers and column headers.    
@@ -1610,29 +1610,29 @@ mod tests {
     // fn test_process_command_variants() {
     //     use std::collections::HashSet;
     //     use spreadsheet::{sheet::CachedRange, cli_app::process_command};
-    
+
     //     let mut sheet = Box::new(Spreadsheet::new(20, 20));
     //     let mut status = String::new();
-    
+
     //     // 1) navigation keys
     //     process_command(&mut sheet, "w", &mut status);
     //     assert_eq!(sheet.top_row, 0, "‘w’ should not go above 0");
-    
+
     //     process_command(&mut sheet, "s", &mut status);
     //     // with a 20-row sheet and a 10-row viewport, stepping down once lands at 10
     //     assert_eq!(sheet.top_row, 10, "‘s’ should move down by exactly viewport height");
-    
+
     //     process_command(&mut sheet, "a", &mut status);
     //     assert_eq!(sheet.left_col, 0, "‘a’ should not go left of 0");
-    
+
     //     process_command(&mut sheet, "d", &mut status);
     //     assert_eq!(sheet.left_col, 10, "‘d’ should move right by exactly viewport width");
-    
+
     //     // 2) scroll_to a valid cell
     //     process_command(&mut sheet, "scroll_to B5", &mut status);
     //     assert_eq!(sheet.top_row, 4);
     //     assert_eq!(sheet.left_col, 1);
-    
+
     //     // 3) scroll_to an un‐parseable cell name
     //     status.clear();
     //     process_command(&mut sheet, "scroll_to InvalidCell", &mut status);
@@ -1641,7 +1641,7 @@ mod tests {
     //         "Expected an ‘Invalid …’ message, got `{}`",
     //         status
     //     );
-    
+
     //     // 4) scroll_to an out-of-bounds cell
     //     status.clear();
     //     process_command(&mut sheet, "scroll_to Z99", &mut status);
@@ -1650,20 +1650,20 @@ mod tests {
     //         "Expected an ‘…bounds’ message, got `{}`",
     //         status
     //     );
-    
+
     //     // 5) disable/enable output
     //     sheet.output_enabled = true;
     //     process_command(&mut sheet, "disable_output", &mut status);
     //     assert!(!sheet.output_enabled, "disable_output must flip output_enabled to false");
-    
+
     //     process_command(&mut sheet, "enable_output", &mut status);
     //     assert!(sheet.output_enabled, "enable_output must flip output_enabled to true");
-    
+
     //     // 6) direct assignment
     //     status.clear();
     //     process_command(&mut sheet, "A1=42", &mut status);
     //     assert_eq!(sheet.get_cell_value(0, 0), 42);
-    
+
     //     // 7) clear_cache
     //     sheet.cache.insert(
     //         "foo".to_string(),
@@ -1676,13 +1676,12 @@ mod tests {
     //     process_command(&mut sheet, "clear_cache", &mut status);
     //     assert_eq!(status, "Cache cleared");
     //     assert!(sheet.cache.is_empty(), "clear_cache must empty the cache");
-    
+
     //     // 8) completely unrecognized command
     //     status.clear();
     //     process_command(&mut sheet, "some_unknown_cmd", &mut status);
     //     assert_eq!(status, "unrecognized cmd");
     // }
-    
 
     #[cfg(feature = "undo_state")]
     #[test]
@@ -1719,6 +1718,6 @@ mod tests {
         // Test history command without feature enabled
         crate::cli_app::process_command(&mut sheet, "history A1", &mut status_msg);
         #[cfg(not(feature = "cell_history"))]
-    assert_eq!(status_msg, "Cell history feature is not enabled.");
+        assert_eq!(status_msg, "Cell history feature is not enabled.");
     }
 }

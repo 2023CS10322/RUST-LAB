@@ -1378,12 +1378,14 @@ mod tests {
     // ─── tests for parser.rs ──────────────────────────────────────────────────────
     #[cfg(test)]
     mod parser_tests {
+        use std::f64::consts::PI;
+
         use super::*;
         use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
 
         #[test]
         fn value_enum_helpers() {
-            assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
+            assert_eq!(Value::Number(PI).as_number(), Some(PI));
             assert_eq!(Value::Bool(true).as_bool(), Some(true));
             assert_eq!(Value::Text("hello".into()).as_text(), Some("hello"));
             // mismatch
@@ -1618,7 +1620,7 @@ mod tests {
 
             #[test]
             fn value_enum_helpers() {
-                assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
+                assert_eq!(Value::Number(PI).as_number(), Some(PI));
                 assert_eq!(Value::Bool(true).as_bool(), Some(true));
                 assert_eq!(Value::Text("hi".into()).as_text(), Some("hi"));
                 assert_eq!(Value::Number(0.0).as_bool(), None);
@@ -2933,17 +2935,17 @@ fn test_evaluate_ast_errors() {
     assert_eq!(evaluate_ast(&cs, &sleep_err, 0, 0, &mut err), 0);
     assert_eq!(err, 3);
 }
-
+use std::f64::consts::PI;
 #[test]
 fn test_value_enum_methods() {
     // Test all Value enum methods and their error paths
-    let num = Value::Number(3.14);
+    let num = Value::Number(PI);
     let text = Value::Text("hello".to_string());
     let bool_val = Value::Bool(true);
     let err_val = Value::Error("Error message".to_string());
 
     // Test successful cases
-    assert_eq!(num.as_number(), Some(3.14));
+    assert_eq!(num.as_number(), Some(PI));
     assert_eq!(text.as_text(), Some("hello"));
     assert_eq!(bool_val.as_bool(), Some(true));
 

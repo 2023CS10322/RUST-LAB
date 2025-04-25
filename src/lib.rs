@@ -1,7 +1,7 @@
 //! A tiny, embeddable spreadsheet engine in pure Rust.
-//! 
+//!
 //! # Features
-//! 
+//!
 //! - Sparse storage for large grids
 //! - Formula evaluation with `SUM`, `IF`, `COUNTIF`, etc.
 //! - Multi-level undo/redo and cell history (behind features)
@@ -10,7 +10,7 @@
 //! # spreadsheet
 //!
 //! A tiny, embeddable spreadsheet engine in pure Rust.
-//! 
+//!
 //! ## Features
 //! - Sparse storage
 //! - Formula evaluation (`SUM`, `IF`, `COUNTIF`, …)
@@ -22,7 +22,8 @@
 //! ## Core Modules
 //!  - [`parser`] — parse and evaluate formulas  
 //!  - [`sheet`]  — manage cells, dependencies, and recalculation  
-//!  - [`cli_app`] / [`gui_app`] — front-ends for terminal and GUI  
+//!  - [`cli_app`] / [`gui_app`] — front-ends for terminal and GUI
+//!  
 #![allow(warnings)]
 pub mod parser;
 /// The `parser` module handles lexical analysis, recursive-descent parsing,
@@ -38,17 +39,17 @@ pub mod sheet;
 // Export the CLI functions for tests to use
 #[cfg(feature = "cli_app")]
 pub mod cli_app {
-     //! A lightweight CLI front-end for testing and autograder compatibility.
+    //! A lightweight CLI front-end for testing and autograder compatibility.
     //! Exposes viewport scrolling, cell assignment, cache clearing,
     //! undo/redo, and history commands.
     use crate::parser::*;
     use crate::sheet::*;
     /// ```rust
-/// // import from your crate
-/// use spreadsheet::cli_app::col_to_letters;
-///
-/// assert_eq!(col_to_letters(0), "A");
-/// assert_eq!(col_to_letters(26), "AA");
+    /// // import from your crate
+    /// use spreadsheet::cli_app::col_to_letters;
+    ///
+    /// assert_eq!(col_to_letters(0), "A");
+    /// assert_eq!(col_to_letters(26), "AA");
     pub fn col_to_letters(mut col: i32) -> String {
         let mut buf = Vec::new();
         loop {
