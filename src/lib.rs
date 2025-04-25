@@ -2,12 +2,11 @@
 pub mod parser;
 pub mod sheet;
 
-
 // Export the CLI functions for tests to use
 #[cfg(feature = "cli_app")]
 pub mod cli_app {
-    use crate::sheet::*;
     use crate::parser::*;
+    use crate::sheet::*;
     // Direct implementation of the functions needed for testing
     pub fn col_to_letters(mut col: i32) -> String {
         let mut buf = Vec::new();
@@ -40,7 +39,7 @@ pub mod cli_app {
             *start_col = 0;
         }
     }
-    
+
     pub fn process_command(sheet: &mut Box<Spreadsheet>, cmd: &str, status_msg: &mut String) {
         if cmd == "w" {
             sheet.top_row -= 10;
@@ -135,7 +134,7 @@ pub mod cli_app {
 pub mod gui_app {
     use crate::parser::*;
     use crate::sheet::*;
-    
+
     // Implement GUI-related functions needed for testing
     pub fn col_to_letters(mut col: i32) -> String {
         if col < 0 {
@@ -166,7 +165,6 @@ pub mod gui_app {
         format!("{}{}", col_name, row + 1)
     }
 }
-
 
 // ─── at the very bottom of src/lib.rs ─────────────────────────────────────────
 #[cfg(test)]
@@ -270,9 +268,9 @@ mod lib_tests {
             crate::sheet::CachedRange {
                 value: 1,
                 dependencies: std::collections::HashSet::new(),
-            }
+            },
         );
-        sheet.dirty_cells.insert((0,0));
+        sheet.dirty_cells.insert((0, 0));
         cli_app::process_command(&mut sheet, "clear_cache", &mut msg);
         assert_eq!(msg, "Cache cleared");
         assert!(sheet.cache.is_empty());
@@ -282,7 +280,7 @@ mod lib_tests {
     #[test]
     #[cfg(feature = "cli_app")]
     fn test_undo_redo_placeholders() {
-        let mut sheet = Box::new(Spreadsheet::new(1,1));
+        let mut sheet = Box::new(Spreadsheet::new(1, 1));
         let mut msg = String::new();
 
         // undo/redo without feature
@@ -323,6 +321,4 @@ mod lib_tests {
         assert_eq!(gui_app::coords_to_cell_name(4, 25), "Z5");
         assert_eq!(gui_app::coords_to_cell_name(9, 26), "AA10");
     }
-    
-    
 }

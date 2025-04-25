@@ -204,7 +204,13 @@ impl Spreadsheet {
     }
 
     // Helper to update cell value and potentially its history
-    pub fn update_cell_value(&mut self, row: i32, col: i32, new_value: i32, new_status: CellStatus) {
+    pub fn update_cell_value(
+        &mut self,
+        row: i32,
+        col: i32,
+        new_value: i32,
+        new_status: CellStatus,
+    ) {
         let cell = self.get_or_create_cell(row, col);
 
         // --- Additions for Cell History ---
@@ -1109,7 +1115,6 @@ pub fn extract_dependencies_without_self(
                 {
                     let (start_row, end_row) = if r1 <= r2 { (r1, r2) } else { (r2, r1) };
                     let (start_col, end_col) = if c1 <= c2 { (c1, c2) } else { (c2, c1) };
-                    
 
                     for rr in start_row..=end_row {
                         for cc in start_col..=end_col {
@@ -1354,25 +1359,20 @@ pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i3
 }
 
 #[cfg(test)]
-mod tests {        // everything declared in sheet.rs
-use crate::parser::clear_range_cache;
+mod tests {
+    // everything declared in sheet.rs
     use super::*;
-    use crate::parser::{          // for the cache/history tests
+    use crate::parser::clear_range_cache;
+    use crate::parser::{
+        // for the cache/history tests
         evaluate_formula,
     };
 
     // only compile these if the cli_app feature is on
     #[cfg(feature = "cli_app")]
-
-        use super::*; // now brings in sheet.rs items via the outer super
-        // import your CLI helpers:
-        use crate::cli_app::{
-            col_to_letters,
-            clamp_viewport_ve,
-            clamp_viewport_hz,
-            process_command,
-        };
-
+    use super::*; // now brings in sheet.rs items via the outer super
+                  // import your CLI helpers:
+    use crate::cli_app::{clamp_viewport_hz, clamp_viewport_ve, col_to_letters, process_command};
 
     #[test]
     fn cell_name_roundtrip_and_bounds() {
@@ -1396,34 +1396,38 @@ use crate::parser::clear_range_cache;
 
     #[test]
     fn extract_dependencies_and_circular() {
-        let deps = extract_dependencies(&Spreadsheet::new(5,5), "B2:C3");
-        assert!(deps.contains(&(1,1)) && deps.contains(&(2,2)));
+        let deps = extract_dependencies(&Spreadsheet::new(5, 5), "B2:C3");
+        assert!(deps.contains(&(1, 1)) && deps.contains(&(2, 2)));
         // manual cycle
-        let mut s = Spreadsheet::new(2,2);
-        s.get_or_create_cell(0,0).dependencies.insert((0,1));
-        s.get_or_create_cell(0,1).dependencies.insert((0,0));
-        assert!(has_circular_dependency(&s, 0,0));
-        assert!(has_circular_dependency_by_index(&s, 0,0));
+        let mut s = Spreadsheet::new(2, 2);
+        s.get_or_create_cell(0, 0).dependencies.insert((0, 1));
+        s.get_or_create_cell(0, 1).dependencies.insert((0, 0));
+        assert!(has_circular_dependency(&s, 0, 0));
+        assert!(has_circular_dependency_by_index(&s, 0, 0));
     }
-
 
     #[test]
     fn clear_and_invalidate_range_cache() {
-        let mut s = Spreadsheet::new(2,2);
-        s.update_cell_value(0,0, 3, CellStatus::Ok);
-        s.update_cell_value(0,1, 5, CellStatus::Ok);
+        let mut s = Spreadsheet::new(2, 2);
+        s.update_cell_value(0, 0, 3, CellStatus::Ok);
+        s.update_cell_value(0, 1, 5, CellStatus::Ok);
         let mut msg = String::new();
         let cs = CloneableSheet::new(&s);
-        assert_eq!(crate::parser::evaluate_formula(&cs, "SUM(A1:B1)", 0,0, &mut 0, &mut msg), 8);
+        assert_eq!(
+            crate::parser::evaluate_formula(&cs, "SUM(A1:B1)", 0, 0, &mut 0, &mut msg),
+            8
+        );
         clear_range_cache();
         // change value and re-eval
-        s.update_cell_value(0,0, 7, CellStatus::Ok);
+        s.update_cell_value(0, 0, 7, CellStatus::Ok);
         let cs2 = CloneableSheet::new(&s);
-        assert_eq!(crate::parser::evaluate_formula(&cs2, "SUM(A1:B1)", 0,0, &mut 0, &mut msg), 12);
+        assert_eq!(
+            crate::parser::evaluate_formula(&cs2, "SUM(A1:B1)", 0, 0, &mut 0, &mut msg),
+            12
+        );
     }
 
     fn recalc_dirty_and_error_propagation() {
-
         // Build a little chain of dependents A1→A2→A3→A4
         let mut sheet = Spreadsheet::new(4, 1);
         sheet.get_or_create_cell(0, 0).dependents.insert((1, 0));
@@ -1439,25 +1443,27 @@ use crate::parser::clear_range_cache;
         // A2 and A3 get marked; A4 does _not_
         assert!(sheet.dirty_cells.contains(&(1, 0)), "A2 should be dirty");
         assert!(sheet.dirty_cells.contains(&(2, 0)), "A3 should be dirty");
-        assert!(!sheet.dirty_cells.contains(&(3, 0)), "A4 should NOT be dirty");
+        assert!(
+            !sheet.dirty_cells.contains(&(3, 0)),
+            "A4 should NOT be dirty"
+        );
     }
-
 
     #[test]
     fn mark_and_dirty_cells() {
-        let mut s = Spreadsheet::new(4,1);
+        let mut s = Spreadsheet::new(4, 1);
         // manually wire dependents: A1→A2→A3→A4
         for i in 0..3 {
-            s.get_or_create_cell(i,0).dependents.insert((i+1,0));
+            s.get_or_create_cell(i, 0).dependents.insert((i + 1, 0));
         }
-        mark_cell_and_dependents_as_error(&mut s, 0,0);
+        mark_cell_and_dependents_as_error(&mut s, 0, 0);
         for i in 0..4 {
-            assert_eq!(s.get_cell_status(i,0), CellStatus::Error);
+            assert_eq!(s.get_cell_status(i, 0), CellStatus::Error);
         }
     }
 
     use super::*; // brings Spreadsheet, CellStatus, etc.
-    
+
     #[test]
     fn get_or_create_cell_tracks_dependencies_and_dependents() {
         let mut sheet = Spreadsheet::new(3, 3);
@@ -1477,7 +1483,6 @@ use crate::parser::clear_range_cache;
         mark_cell_and_dependents_as_error(&mut sheet, 0, 0);
         assert_eq!(sheet.get_cell_status(2, 0), CellStatus::Error);
     }
-
 
     fn name_and_coords_roundtrip() {
         assert_eq!(cell_name_to_coords("A1"), Some((0, 0)));
@@ -1518,10 +1523,10 @@ use crate::parser::clear_range_cache;
         // range
         let range = extract_dependencies(&sheet, "SUM(A1:B2)");
         let mut expected = std::collections::HashSet::new();
-        expected.insert((0,0));
-        expected.insert((0,1));
-        expected.insert((1,0));
-        expected.insert((1,1));
+        expected.insert((0, 0));
+        expected.insert((0, 1));
+        expected.insert((1, 0));
+        expected.insert((1, 1));
         assert_eq!(range, expected);
     }
 
@@ -1558,7 +1563,7 @@ use crate::parser::clear_range_cache;
     // …and tests for undo/redo, history (if cell_history feature enabled), etc.
     // at the bottom of src/sheet.rs
 
-    use super::*;                     // brings in Spreadsheet, CellStatus, valid_formula, extract_dependencies, etc.
+    use super::*; // brings in Spreadsheet, CellStatus, valid_formula, extract_dependencies, etc.
     use std::collections::HashSet;
 
     #[test]
@@ -1568,47 +1573,47 @@ use crate::parser::clear_range_cache;
         assert_eq!(s.total_cols, 4);
         assert!(s.cells.is_empty());
         // name conversions
-        assert_eq!(cell_name_to_coords("B2"), Some((1,1)));
+        assert_eq!(cell_name_to_coords("B2"), Some((1, 1)));
         assert_eq!(coords_to_cell_name(1, 1), "B2");
     }
 
     #[test]
     fn set_value_and_raw_content() {
-        let mut s = Spreadsheet::new(2,2);
-        s.update_cell_value(0,0, 99, CellStatus::Ok);
-        assert_eq!(s.get_cell_value(0,0), 99);
-        assert_eq!(s.get_cell_raw_content(0,0), "");
+        let mut s = Spreadsheet::new(2, 2);
+        s.update_cell_value(0, 0, 99, CellStatus::Ok);
+        assert_eq!(s.get_cell_value(0, 0), 99);
+        assert_eq!(s.get_cell_raw_content(0, 0), "");
     }
 
     #[test]
     fn set_formula_and_recalc_chain() {
-        let mut s = Spreadsheet::new(2,2);
+        let mut s = Spreadsheet::new(2, 2);
         let mut status = String::new();
-        s.update_cell_formula(0,0, "5", &mut status);
-        s.update_cell_formula(1,0, "A1*2", &mut status);
-        assert_eq!(s.get_cell_value(1,0), 10);
+        s.update_cell_formula(0, 0, "5", &mut status);
+        s.update_cell_formula(1, 0, "A1*2", &mut status);
+        assert_eq!(s.get_cell_value(1, 0), 10);
     }
 
     #[test]
     fn recalc_affected_propagates_and_clears_dirty() {
-        let mut s = Spreadsheet::new(3,1);
+        let mut s = Spreadsheet::new(3, 1);
         let mut status = String::new();
         // A1=1, A2=A1+1, A3=A2+1
-        s.update_cell_formula(0,0, "1", &mut status);
-        s.update_cell_formula(1,0, "A1+1", &mut status);
-        s.update_cell_formula(2,0, "A2+1", &mut status);
+        s.update_cell_formula(0, 0, "1", &mut status);
+        s.update_cell_formula(1, 0, "A1+1", &mut status);
+        s.update_cell_formula(2, 0, "A2+1", &mut status);
 
         // dirty just A1
-        s.dirty_cells.insert((0,0));
+        s.dirty_cells.insert((0, 0));
         recalc_affected(&mut s, &mut status);
 
         assert!(s.dirty_cells.is_empty());
-        assert_eq!(s.get_cell_value(2,0), 3);
+        assert_eq!(s.get_cell_value(2, 0), 3);
     }
 
     #[test]
     fn extract_and_validate() {
-        let s = Spreadsheet::new(3,3);
+        let s = Spreadsheet::new(3, 3);
         let mut msg = String::new();
         // valid literal formula
         assert_eq!(valid_formula(&s, "123", &mut msg), 0);
@@ -1620,7 +1625,7 @@ use crate::parser::clear_range_cache;
         let mut want = HashSet::new();
         for r in 0..3 {
             for c in 0..3 {
-                want.insert((r,c));
+                want.insert((r, c));
             }
         }
         assert_eq!(deps, want);
@@ -1628,14 +1633,13 @@ use crate::parser::clear_range_cache;
 
     #[test]
     fn error_propagation_on_div_zero() {
-        let mut s = Spreadsheet::new(2,2);
+        let mut s = Spreadsheet::new(2, 2);
         let mut msg = String::new();
-        s.update_cell_formula(0,0, "10", &mut msg);
-        s.update_cell_formula(0,1, "0", &mut msg);
-        s.update_cell_formula(1,0, "A1/B1", &mut msg);
-        assert_eq!(s.get_cell_status(1,0), CellStatus::Error);
+        s.update_cell_formula(0, 0, "10", &mut msg);
+        s.update_cell_formula(0, 1, "0", &mut msg);
+        s.update_cell_formula(1, 0, "A1/B1", &mut msg);
+        assert_eq!(s.get_cell_status(1, 0), CellStatus::Error);
     }
-
 
     #[test]
     fn test_col_to_letters_cli() {
@@ -1647,7 +1651,7 @@ use crate::parser::clear_range_cache;
     }
 
     #[test]
-      fn test_clamp_viewport() {
+    fn test_clamp_viewport() {
         let mut r = 50;
         clamp_viewport_ve(40, &mut r);
         assert_eq!(r, 40, "50 > 40, so we do 50 - 10 = 40");
@@ -1683,8 +1687,6 @@ use crate::parser::clear_range_cache;
         assert_eq!(status, "unrecognized cmd");
     }
 
-   
-
     #[test]
     fn test_clear_cache_and_history_without_feature() {
         let mut sheet = Spreadsheet::new(3, 3);
@@ -1715,23 +1717,23 @@ use crate::parser::clear_range_cache;
     #[cfg(feature = "undo_state")]
     #[test]
     fn test_undo_redo_basic() {
-        let mut sheet = Spreadsheet::new(2,2);
+        let mut sheet = Spreadsheet::new(2, 2);
         let mut status = String::new();
-        sheet.update_cell_formula(0,0, "5", &mut status);
-        sheet.update_cell_formula(0,0, "6", &mut status);
+        sheet.update_cell_formula(0, 0, "5", &mut status);
+        sheet.update_cell_formula(0, 0, "6", &mut status);
         super::cli_app::process_command(&mut sheet, "undo", &mut status);
-        assert_eq!(sheet.get_cell_value(0,0), 5);
+        assert_eq!(sheet.get_cell_value(0, 0), 5);
         super::cli_app::process_command(&mut sheet, "redo", &mut status);
-        assert_eq!(sheet.get_cell_value(0,0), 6);
+        assert_eq!(sheet.get_cell_value(0, 0), 6);
     }
 
     #[cfg(feature = "cell_history")]
     #[test]
     fn test_cell_history_feature() {
-        let mut sheet = Spreadsheet::new(2,2);
+        let mut sheet = Spreadsheet::new(2, 2);
         let mut status = String::new();
-        sheet.update_cell_formula(0,0, "5", &mut status);
-        sheet.update_cell_formula(0,0, "7", &mut status);
+        sheet.update_cell_formula(0, 0, "5", &mut status);
+        sheet.update_cell_formula(0, 0, "7", &mut status);
         super::cli_app::process_command(&mut sheet, "history A1", &mut status);
         assert_eq!(status, "History displayed");
     }
@@ -1742,301 +1744,282 @@ use crate::parser::clear_range_cache;
 
     #[test]
     fn test_dirty_and_recalc_chain() {
-        let mut sheet = Spreadsheet::new(4,1);
-        sheet.get_or_create_cell(0,0).dependents.insert((1,0));
-        sheet.get_or_create_cell(1,0).dependents.insert((2,0));
-        sheet.get_or_create_cell(2,0).dependents.insert((3,0));
+        let mut sheet = Spreadsheet::new(4, 1);
+        sheet.get_or_create_cell(0, 0).dependents.insert((1, 0));
+        sheet.get_or_create_cell(1, 0).dependents.insert((2, 0));
+        sheet.get_or_create_cell(2, 0).dependents.insert((3, 0));
 
         // mark dirty
-        mark_cell_and_dependents_dirty(&mut sheet, 0,0);
-        assert!(sheet.dirty_cells.contains(&(1,0)));
-        assert!(sheet.dirty_cells.contains(&(2,0)));
-        assert!(!sheet.dirty_cells.contains(&(3,0)));
+        mark_cell_and_dependents_dirty(&mut sheet, 0, 0);
+        assert!(sheet.dirty_cells.contains(&(1, 0)));
+        assert!(sheet.dirty_cells.contains(&(2, 0)));
+        assert!(!sheet.dirty_cells.contains(&(3, 0)));
 
         // recalc with a simple chain of formulas
         let mut status = String::new();
-        sheet.update_cell_formula(0,0,"1",&mut status);
-        sheet.update_cell_formula(1,0,"A1+1",&mut status);
-        sheet.update_cell_formula(2,0,"A2+1",&mut status);
-        sheet.dirty_cells.insert((0,0));
+        sheet.update_cell_formula(0, 0, "1", &mut status);
+        sheet.update_cell_formula(1, 0, "A1+1", &mut status);
+        sheet.update_cell_formula(2, 0, "A2+1", &mut status);
+        sheet.dirty_cells.insert((0, 0));
         recalc_affected(&mut sheet, &mut status);
-        assert_eq!(sheet.get_cell_value(2,0), 3);
+        assert_eq!(sheet.get_cell_value(2, 0), 3);
         assert!(sheet.dirty_cells.is_empty());
     }
-
 
     use super::*;
     // 2) pull in your CLI layer so `process_command` is visible:
     use crate::cli_app;
 
-   
-   // ────────────────────────────────────────────────────────────────────────────────
-// expose private parser functions & types to our #[cfg(test)] module
-#[cfg(test)]
-pub(crate) mod test_exports {
-    pub use crate::parser::{
-        ASTNode,
-        parse_expr,
-        parse_term,
-        parse_factor,
-        evaluate_range_function,
-        evaluate_large_range,
-        clear_range_cache,
-        invalidate_cache_for_cell,
-        evaluate_ast,
-        RANGE_CACHE,
-    };
-}
-
-#[cfg(test)]
-mod parser_internal_tests {
-    use super::test_exports::*;
-    use crate::sheet::{Spreadsheet, CloneableSheet, CellStatus};
-
-    #[test]
-    fn test_skip_spaces_and_number_parsing() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs    = CloneableSheet::new(&*sheet);
-        let mut s = "   -123abc";
-        let mut err = 0;
-        let v = parse_factor(&cs, &mut s, 0, 0, &mut err);
-        assert_eq!(v, -123);
-        assert_eq!(err, 0);
+    // ────────────────────────────────────────────────────────────────────────────────
+    // expose private parser functions & types to our #[cfg(test)] module
+    #[cfg(test)]
+    pub(crate) mod test_exports {
+        pub use crate::parser::{
+            clear_range_cache, evaluate_ast, evaluate_large_range, evaluate_range_function,
+            invalidate_cache_for_cell, parse_expr, parse_factor, parse_term, ASTNode, RANGE_CACHE,
+        };
     }
 
-    #[test]
-    fn test_parse_comparisons_and_binary() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs    = CloneableSheet::new(&*sheet);
-        let mut err = 0;
+    #[cfg(test)]
+    mod parser_internal_tests {
+        use super::test_exports::*;
+        use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
 
-        let mut s1 = "2>1";
-        assert_eq!(parse_expr(&cs, &mut s1, 0, 0, &mut err), 1);
+        #[test]
+        fn test_skip_spaces_and_number_parsing() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&*sheet);
+            let mut s = "   -123abc";
+            let mut err = 0;
+            let v = parse_factor(&cs, &mut s, 0, 0, &mut err);
+            assert_eq!(v, -123);
+            assert_eq!(err, 0);
+        }
 
-        let mut s2 = "5<=3";
-        assert_eq!(parse_expr(&cs, &mut s2, 0, 0, &mut err), 0);
+        #[test]
+        fn test_parse_comparisons_and_binary() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&*sheet);
+            let mut err = 0;
 
-        let mut s3 = "4==4";
-        assert_eq!(parse_expr(&cs, &mut s3, 0, 0, &mut err), 1);
+            let mut s1 = "2>1";
+            assert_eq!(parse_expr(&cs, &mut s1, 0, 0, &mut err), 1);
 
-        let mut s4 = "3+2*4-5/5";
-        assert_eq!(parse_expr(&cs, &mut s4, 0, 0, &mut err), 10);
-    }
+            let mut s2 = "5<=3";
+            assert_eq!(parse_expr(&cs, &mut s2, 0, 0, &mut err), 0);
 
-    #[test]
-    fn test_evaluate_range_function_errors_and_success() {
-        let mut sheet = Spreadsheet::new(2,2);
-        let cs = CloneableSheet::new(&*sheet);
-        let mut err = 0;
+            let mut s3 = "4==4";
+            assert_eq!(parse_expr(&cs, &mut s3, 0, 0, &mut err), 1);
 
-        // syntax error
-        assert_eq!(evaluate_range_function(&cs, "SUM", "A1B2", &mut err), 0);
-        assert_eq!(err, 1);
+            let mut s4 = "3+2*4-5/5";
+            assert_eq!(parse_expr(&cs, &mut s4, 0, 0, &mut err), 10);
+        }
 
-        // out‐of‐bounds
-        err = 0;
-        assert_eq!(evaluate_range_function(&cs, "SUM", "A1:C1", &mut err), 0);
-        assert_eq!(err, 4);
+        #[test]
+        fn test_evaluate_range_function_errors_and_success() {
+            let mut sheet = Spreadsheet::new(2, 2);
+            let cs = CloneableSheet::new(&*sheet);
+            let mut err = 0;
 
-        // valid
-        sheet.update_cell_value(0,0,1,CellStatus::Ok);
-        sheet.update_cell_value(0,1,2,CellStatus::Ok);
-        let cs2 = CloneableSheet::new(&*sheet);
-        err = 0;
-        assert_eq!(evaluate_range_function(&cs2, "SUM", "A1:B1", &mut err), 3);
-    }
+            // syntax error
+            assert_eq!(evaluate_range_function(&cs, "SUM", "A1B2", &mut err), 0);
+            assert_eq!(err, 1);
 
-    #[test]
-    fn test_clear_and_invalidate_cache_for_cell() {
-        clear_range_cache();
-        // manually inject into the RANGE_CACHE:
-        RANGE_CACHE.with(|c| {
-            c.borrow_mut().insert("X".into(), (5, [ (0,0) ].iter().cloned().collect()));
-        });
-        invalidate_cache_for_cell(0,0);
-        RANGE_CACHE.with(|c| assert!(c.borrow().is_empty()));
-    }
+            // out‐of‐bounds
+            err = 0;
+            assert_eq!(evaluate_range_function(&cs, "SUM", "A1:C1", &mut err), 0);
+            assert_eq!(err, 4);
 
-    #[test]
-    fn test_evaluate_ast_literals_and_sleep() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs    = CloneableSheet::new(&*sheet);
-        let mut err = 0;
+            // valid
+            sheet.update_cell_value(0, 0, 1, CellStatus::Ok);
+            sheet.update_cell_value(0, 1, 2, CellStatus::Ok);
+            let cs2 = CloneableSheet::new(&*sheet);
+            err = 0;
+            assert_eq!(evaluate_range_function(&cs2, "SUM", "A1:B1", &mut err), 3);
+        }
 
-        let lit = ASTNode::Literal(7);
-        assert_eq!(evaluate_ast(&cs, &lit, 0,0, &mut err), 7);
+        #[test]
+        fn test_clear_and_invalidate_cache_for_cell() {
+            clear_range_cache();
+            // manually inject into the RANGE_CACHE:
+            RANGE_CACHE.with(|c| {
+                c.borrow_mut()
+                    .insert("X".into(), (5, [(0, 0)].iter().cloned().collect()));
+            });
+            invalidate_cache_for_cell(0, 0);
+            RANGE_CACHE.with(|c| assert!(c.borrow().is_empty()));
+        }
 
-        let sf = ASTNode::SleepFunction(Box::new(ASTNode::Literal(-2)));
-        assert_eq!(evaluate_ast(&cs, &sf, 0,0, &mut err), -2);
-    }
-}
+        #[test]
+        fn test_evaluate_ast_literals_and_sleep() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&*sheet);
+            let mut err = 0;
 
-   
-   
-#[test]
-fn test_extract_dependencies_without_self_simple_range() {
-    // A1:B2 should give (0,0),(0,1),(1,0),(1,1)
-    let deps = extract_dependencies_without_self("A1:B2", 10, 10);
-    let mut want = std::collections::HashSet::new();
-    want.insert((0, 0));
-    want.insert((0, 1));
-    want.insert((1, 0));
-    want.insert((1, 1));
-    assert_eq!(deps, want);
-}
+            let lit = ASTNode::Literal(7);
+            assert_eq!(evaluate_ast(&cs, &lit, 0, 0, &mut err), 7);
 
-#[test]
-fn test_extract_dependencies_without_self_reversed_range() {
-    // Even if the bounds are reversed, it should normalize
-    let deps = extract_dependencies_without_self("B2:A1", 10, 10);
-    let mut want = std::collections::HashSet::new();
-    want.insert((0, 0));
-    want.insert((0, 1));
-    want.insert((1, 0));
-    want.insert((1, 1));
-    assert_eq!(deps, want);
-}
-
-#[test]
-fn test_extract_dependencies_without_self_multi_letter_cols() {
-    // AA1:AB2 maps to rows 0–1, cols 26→27 (0‐based 26 and 27)
-    let deps = extract_dependencies_without_self("AA1:AB2", 100, 100);
-    let mut want = std::collections::HashSet::new();
-    for r in 0..=1 {
-        for c in 26..=27 {
-            want.insert((r, c));
+            let sf = ASTNode::SleepFunction(Box::new(ASTNode::Literal(-2)));
+            assert_eq!(evaluate_ast(&cs, &sf, 0, 0, &mut err), -2);
         }
     }
-    assert_eq!(deps, want);
-}
 
+    #[test]
+    fn test_extract_dependencies_without_self_simple_range() {
+        // A1:B2 should give (0,0),(0,1),(1,0),(1,1)
+        let deps = extract_dependencies_without_self("A1:B2", 10, 10);
+        let mut want = std::collections::HashSet::new();
+        want.insert((0, 0));
+        want.insert((0, 1));
+        want.insert((1, 0));
+        want.insert((1, 1));
+        assert_eq!(deps, want);
+    }
 
-#[test]
-fn test_extract_dependencies_without_self_single_cell() {
-    // Single cell reference
-    let deps = extract_dependencies_without_self("C3", 5, 5);
-    let mut want = std::collections::HashSet::new();
-    want.insert((2, 2));
-    assert_eq!(deps, want);
-}
+    #[test]
+    fn test_extract_dependencies_without_self_reversed_range() {
+        // Even if the bounds are reversed, it should normalize
+        let deps = extract_dependencies_without_self("B2:A1", 10, 10);
+        let mut want = std::collections::HashSet::new();
+        want.insert((0, 0));
+        want.insert((0, 1));
+        want.insert((1, 0));
+        want.insert((1, 1));
+        assert_eq!(deps, want);
+    }
 
-#[test]
-fn test_extract_dependencies_without_self_out_of_bounds() {
-    // Z1 is col 25, but total_cols=5 → out of bounds, so skip
-    let deps = extract_dependencies_without_self("Z1:Z1", 5, 5);
-    assert!(deps.is_empty());
-}
+    #[test]
+    fn test_extract_dependencies_without_self_multi_letter_cols() {
+        // AA1:AB2 maps to rows 0–1, cols 26→27 (0‐based 26 and 27)
+        let deps = extract_dependencies_without_self("AA1:AB2", 100, 100);
+        let mut want = std::collections::HashSet::new();
+        for r in 0..=1 {
+            for c in 26..=27 {
+                want.insert((r, c));
+            }
+        }
+        assert_eq!(deps, want);
+    }
 
+    #[test]
+    fn test_extract_dependencies_without_self_single_cell() {
+        // Single cell reference
+        let deps = extract_dependencies_without_self("C3", 5, 5);
+        let mut want = std::collections::HashSet::new();
+        want.insert((2, 2));
+        assert_eq!(deps, want);
+    }
 
+    #[test]
+    fn test_extract_dependencies_without_self_out_of_bounds() {
+        // Z1 is col 25, but total_cols=5 → out of bounds, so skip
+        let deps = extract_dependencies_without_self("Z1:Z1", 5, 5);
+        assert!(deps.is_empty());
+    }
 
-// Add to the `#[cfg(test)] mod tests { ... }` in src/sheet.rs
+    // Add to the `#[cfg(test)] mod tests { ... }` in src/sheet.rs
 
-#[test]
-fn valid_formula_range_errors() {
-    let mut sheet = Spreadsheet::new(5, 5);
-    let mut msg = String::new();
+    #[test]
+    fn valid_formula_range_errors() {
+        let mut sheet = Spreadsheet::new(5, 5);
+        let mut msg = String::new();
 
-    // Missing colon in range
-    assert_eq!(valid_formula(&sheet, "SUM(A1A2)", &mut msg), 1);
-    assert!(msg.contains("Missing colon in range"));
+        // Missing colon in range
+        assert_eq!(valid_formula(&sheet, "SUM(A1A2)", &mut msg), 1);
+        assert!(msg.contains("Missing colon in range"));
 
-    // Second cell reference out of bounds
-    msg.clear();
-    assert_eq!(valid_formula(&sheet, "SUM(A1:Z10)", &mut msg), 1);
-    assert!(msg.contains("Second cell reference out of bounds"));
+        // Second cell reference out of bounds
+        msg.clear();
+        assert_eq!(valid_formula(&sheet, "SUM(A1:Z10)", &mut msg), 1);
+        assert!(msg.contains("Second cell reference out of bounds"));
 
-    // Invalid range order
-    msg.clear();
-    assert_eq!(valid_formula(&sheet, "SUM(B2:A1)", &mut msg), 1);
-    assert!(msg.contains("Invalid range order"));
-}
+        // Invalid range order
+        msg.clear();
+        assert_eq!(valid_formula(&sheet, "SUM(B2:A1)", &mut msg), 1);
+        assert!(msg.contains("Invalid range order"));
+    }
 
-fn valid_formula_operator_not_found() {
-    let sheet = Spreadsheet::new(3, 3);
-    let mut msg = String::new();
-    let code = valid_formula(&sheet, "XYZ", &mut msg);
-    assert_eq!(code, 1);
-    assert_eq!(msg, "Operator not found");
-}
+    fn valid_formula_operator_not_found() {
+        let sheet = Spreadsheet::new(3, 3);
+        let mut msg = String::new();
+        let code = valid_formula(&sheet, "XYZ", &mut msg);
+        assert_eq!(code, 1);
+        assert_eq!(msg, "Operator not found");
+    }
 
-#[test]
-fn valid_formula_sleep_variants() {
-    let sheet = Spreadsheet::new(2, 2);
-    let mut msg = String::new();
-    // Missing closing parenthesis
-    assert_eq!(valid_formula(&sheet, "SLEEP(1", &mut msg), 1);
-    assert_eq!(msg, "Missing closing parenthesis in SLEEP");
-    // Integer argument
-    msg.clear();
-    let code_int = valid_formula(&sheet, "SLEEP(5)", &mut msg);
-    assert_eq!(code_int, 0);
-    assert_eq!(msg, "");
-    // Valid cell reference
-    msg.clear();
-    let code_ref = valid_formula(&sheet, "SLEEP(A1)", &mut msg);
-    assert_eq!(code_ref, 0);
-    // Out-of-bounds cell reference
-    msg.clear();
-    let code_oob = valid_formula(&sheet, "SLEEP(Z9)", &mut msg);
-    assert_eq!(code_oob, 1);
-    assert_eq!(msg, "Cell reference in up out of bounds");
-}
+    #[test]
+    fn valid_formula_sleep_variants() {
+        let sheet = Spreadsheet::new(2, 2);
+        let mut msg = String::new();
+        // Missing closing parenthesis
+        assert_eq!(valid_formula(&sheet, "SLEEP(1", &mut msg), 1);
+        assert_eq!(msg, "Missing closing parenthesis in SLEEP");
+        // Integer argument
+        msg.clear();
+        let code_int = valid_formula(&sheet, "SLEEP(5)", &mut msg);
+        assert_eq!(code_int, 0);
+        assert_eq!(msg, "");
+        // Valid cell reference
+        msg.clear();
+        let code_ref = valid_formula(&sheet, "SLEEP(A1)", &mut msg);
+        assert_eq!(code_ref, 0);
+        // Out-of-bounds cell reference
+        msg.clear();
+        let code_oob = valid_formula(&sheet, "SLEEP(Z9)", &mut msg);
+        assert_eq!(code_oob, 1);
+        assert_eq!(msg, "Cell reference in up out of bounds");
+    }
 
-   
-fn recalc_detects_div_zero_and_marks_error() {
-    let mut sheet = Spreadsheet::new(2, 1);
-    let mut status = String::new();
-    // A1 = 2
-    sheet.update_cell_formula(0, 0, "2", &mut status);
-    // A2 = A1/0 → division by zero
-    sheet.update_cell_formula(1, 0, "A1/0", &mut status);
-    sheet.dirty_cells.insert((1, 0));
-    recalc_affected(&mut sheet, &mut status);
-    assert_eq!(sheet.get_cell_status(1, 0), CellStatus::Error);
-    assert_eq!(sheet.get_cell_value(1, 0), 0);
-}
+    fn recalc_detects_div_zero_and_marks_error() {
+        let mut sheet = Spreadsheet::new(2, 1);
+        let mut status = String::new();
+        // A1 = 2
+        sheet.update_cell_formula(0, 0, "2", &mut status);
+        // A2 = A1/0 → division by zero
+        sheet.update_cell_formula(1, 0, "A1/0", &mut status);
+        sheet.dirty_cells.insert((1, 0));
+        recalc_affected(&mut sheet, &mut status);
+        assert_eq!(sheet.get_cell_status(1, 0), CellStatus::Error);
+        assert_eq!(sheet.get_cell_value(1, 0), 0);
+    }
 
-fn inject_formula(sheet: &mut Spreadsheet, formula: &'static str) {
-    // Push into storage and point A1 at it
-    let idx = sheet.formula_storage.len();
-    sheet.formula_storage.push(formula.into());
-    let cell = sheet.get_or_create_cell(0, 0);
-    cell.formula_idx = Some(idx);
-    // clear any old dependencies & dependents
-    cell.dependencies.clear();
-    cell.dependents.clear();
-    sheet.dirty_cells.insert((0, 0));
-}
-#[test]
-fn recalc_detects_reversed_range_as_invalid_range() {
-    let mut sheet = Spreadsheet::new(1, 1);
-    let mut status = String::new();
+    fn inject_formula(sheet: &mut Spreadsheet, formula: &'static str) {
+        // Push into storage and point A1 at it
+        let idx = sheet.formula_storage.len();
+        sheet.formula_storage.push(formula.into());
+        let cell = sheet.get_or_create_cell(0, 0);
+        cell.formula_idx = Some(idx);
+        // clear any old dependencies & dependents
+        cell.dependencies.clear();
+        cell.dependents.clear();
+        sheet.dirty_cells.insert((0, 0));
+    }
+    #[test]
+    fn recalc_detects_reversed_range_as_invalid_range() {
+        let mut sheet = Spreadsheet::new(1, 1);
+        let mut status = String::new();
 
-    // SUM(A2:A1) is syntactically valid, but 2 > 1 should trigger error_flag=2
-    inject_formula(&mut sheet, "SUM(A2:A1)");
-    status.clear();
-    recalc_affected(&mut sheet, &mut status);
-    assert_eq!(status, "Invalid range");
-}
+        // SUM(A2:A1) is syntactically valid, but 2 > 1 should trigger error_flag=2
+        inject_formula(&mut sheet, "SUM(A2:A1)");
+        status.clear();
+        recalc_affected(&mut sheet, &mut status);
+        assert_eq!(status, "Invalid range");
+    }
 
-#[test]
-fn recalc_detects_syntax_error_as_general_error() {
-    let mut sheet = Spreadsheet::new(1, 1);
-    let mut status = String::new();
+    #[test]
+    fn recalc_detects_syntax_error_as_general_error() {
+        let mut sheet = Spreadsheet::new(1, 1);
+        let mut status = String::new();
 
-    // "1?1" passes our simple valid_formula (it has an operator at index 1),
-    // but parse_expr will set error_flag=1 on the '?'.
-    inject_formula(&mut sheet, "1?1");
-    status.clear();
-    recalc_affected(&mut sheet, &mut status);
-    assert_eq!(status, "Error in formula");
-}
+        // "1?1" passes our simple valid_formula (it has an operator at index 1),
+        // but parse_expr will set error_flag=1 on the '?'.
+        inject_formula(&mut sheet, "1?1");
+        status.clear();
+        recalc_affected(&mut sheet, &mut status);
+        assert_eq!(status, "Error in formula");
+    }
 
-   
-   
-   
-   
-   fn cloneable_sheet_get_cell_various() {
+    fn cloneable_sheet_get_cell_various() {
         let mut sheet = Spreadsheet::new(2, 2);
         // Set a cell to a non-default value and status
         sheet.update_cell_value(1, 1, 42, CellStatus::Error);
@@ -2092,7 +2075,7 @@ fn recalc_detects_syntax_error_as_general_error() {
         assert_eq!(code, 1);
         assert_eq!(msg, "Invalid formula format");
     }
-   
+
     fn process_command_scroll_to_invalid_cell() {
         let mut sheet = Spreadsheet::new(5, 5);
         let mut msg = String::new();
@@ -2108,126 +2091,122 @@ fn recalc_detects_syntax_error_as_general_error() {
     fn process_command_clear_cache() {
         let mut sheet = Spreadsheet::new(3, 3);
         let mut msg = String::new();
-        sheet
-            .cache
-            .insert("X".into(), CachedRange { value: 1, dependencies: HashSet::new() });
+        sheet.cache.insert(
+            "X".into(),
+            CachedRange {
+                value: 1,
+                dependencies: HashSet::new(),
+            },
+        );
         process_command(&mut sheet, "clear_cache", &mut msg);
         assert_eq!(msg, "Cache cleared");
         assert!(sheet.cache.is_empty());
     }
-    
+
     #[test]
-fn cloneable_get_cell_bounds_and_default() {
-    let sheet = Spreadsheet::new(2, 2);
-    let cs = crate::sheet::CloneableSheet::new(&*sheet);
-    // out of bounds → None
-    assert!(cs.get_cell(-1, 0).is_none());
-    assert!(cs.get_cell(0, -1).is_none());
-    assert!(cs.get_cell(2, 0).is_none());
-    // in bounds but never set → Some(default)
-    let cv = cs.get_cell(1, 1).unwrap();
-    assert_eq!(cv.value, 0);
-    assert_eq!(cv.status, CellStatus::Ok);
-}
+    fn cloneable_get_cell_bounds_and_default() {
+        let sheet = Spreadsheet::new(2, 2);
+        let cs = crate::sheet::CloneableSheet::new(&*sheet);
+        // out of bounds → None
+        assert!(cs.get_cell(-1, 0).is_none());
+        assert!(cs.get_cell(0, -1).is_none());
+        assert!(cs.get_cell(2, 0).is_none());
+        // in bounds but never set → Some(default)
+        let cv = cs.get_cell(1, 1).unwrap();
+        assert_eq!(cv.value, 0);
+        assert_eq!(cv.status, CellStatus::Ok);
+    }
 
-#[test]
-fn extract_dependencies_without_self_multi_letter_cols() {
-    let deps = crate::sheet::extract_dependencies_without_self("AA1:AB2", 100, 100);
-    let mut want = HashSet::new();
-    // AA → col 26, AB → col 27 (0-based)
-    for r in 0..=1 {
-        for c in 26..=27 {
-            want.insert((r, c));
+    #[test]
+    fn extract_dependencies_without_self_multi_letter_cols() {
+        let deps = crate::sheet::extract_dependencies_without_self("AA1:AB2", 100, 100);
+        let mut want = HashSet::new();
+        // AA → col 26, AB → col 27 (0-based)
+        for r in 0..=1 {
+            for c in 26..=27 {
+                want.insert((r, c));
+            }
         }
+        assert_eq!(deps, want);
     }
-    assert_eq!(deps, want);
-}
 
+    /// valid_formula: missing colon in range
+    #[test]
+    fn sheet_valid_formula_missing_colon() {
+        let s = Spreadsheet::new(3, 3);
+        let mut msg = String::new();
+        assert_eq!(valid_formula(&s, "SUM(A1A2)", &mut msg), 1);
+        assert!(msg.contains("Missing colon"));
+    }
 
+    /// valid_formula: invalid range order
+    #[test]
+    fn sheet_valid_formula_invalid_range_order() {
+        let s = Spreadsheet::new(3, 3);
+        let mut msg = String::new();
+        assert_eq!(valid_formula(&s, "SUM(B2:A1)", &mut msg), 1);
+        assert!(msg.contains("Invalid range order"));
+    }
 
-/// valid_formula: missing colon in range
-#[test]
-fn sheet_valid_formula_missing_colon() {
-    let s = Spreadsheet::new(3, 3);
-    let mut msg = String::new();
-    assert_eq!(valid_formula(&s, "SUM(A1A2)", &mut msg), 1);
-    assert!(msg.contains("Missing colon"));
-}
+    /// valid_formula: missing ')' on SLEEP
+    #[test]
+    fn sheet_valid_formula_sleep_missing_paren() {
+        let s = Spreadsheet::new(1, 1);
+        let mut msg = String::new();
+        assert_eq!(valid_formula(&s, "SLEEP(1", &mut msg), 1);
+        assert!(msg.contains("Missing closing parenthesis"));
+    }
 
-/// valid_formula: invalid range order
-#[test]
-fn sheet_valid_formula_invalid_range_order() {
-    let s = Spreadsheet::new(3, 3);
-    let mut msg = String::new();
-    assert_eq!(valid_formula(&s, "SUM(B2:A1)", &mut msg), 1);
-    assert!(msg.contains("Invalid range order"));
-}
+    /// valid_formula: invalid cell in SLEEP
+    #[test]
+    fn sheet_valid_formula_sleep_invalid_cell() {
+        let s = Spreadsheet::new(1, 1);
+        let mut msg = String::new();
+        assert_eq!(valid_formula(&s, "SLEEP(B2)", &mut msg), 1);
+        assert!(msg.contains("out of bounds"));
+    }
 
-/// valid_formula: missing ')' on SLEEP
-#[test]
-fn sheet_valid_formula_sleep_missing_paren() {
-    let s = Spreadsheet::new(1, 1);
-    let mut msg = String::new();
-    assert_eq!(valid_formula(&s, "SLEEP(1", &mut msg), 1);
-    assert!(msg.contains("Missing closing parenthesis"));
-}
+    /// valid_formula: operator not found
+    #[test]
+    fn sheet_valid_formula_operator_not_found() {
+        let s = Spreadsheet::new(1, 1);
+        let mut msg = String::new();
+        assert_eq!(valid_formula(&s, "foo", &mut msg), 1);
+        assert!(msg.contains("Operator not found"));
+    }
 
-/// valid_formula: invalid cell in SLEEP
-#[test]
-fn sheet_valid_formula_sleep_invalid_cell() {
-    let s = Spreadsheet::new(1, 1);
-    let mut msg = String::new();
-    assert_eq!(valid_formula(&s, "SLEEP(B2)", &mut msg), 1);
-    assert!(msg.contains("out of bounds"));
-}
+    /// valid_formula: invalid format
 
-/// valid_formula: operator not found
-#[test]
-fn sheet_valid_formula_operator_not_found() {
-    let s = Spreadsheet::new(1, 1);
-    let mut msg = String::new();
-    assert_eq!(valid_formula(&s, "foo", &mut msg), 1);
-    assert!(msg.contains("Operator not found"));
-}
+    /// recalc_affected: invalid range sets "Invalid range"
 
-/// valid_formula: invalid format
+    /// recalc_affected: general error sets "Error in formula"
 
-
-/// recalc_affected: invalid range sets "Invalid range"
-
-/// recalc_affected: general error sets "Error in formula"
-
-/// extract_dependencies_without_self: two‐letter columns
-#[test]
-fn sheet_extract_deps_without_self_two_letter() {
-    let deps = extract_dependencies_without_self("AA1:AB2", 100, 100);
-    let mut want = HashSet::new();
-    // AA→col 26, AB→col 27 (0-based)
-    for r in 0..=1 {
-        for c in 26..=27 {
-            want.insert((r, c));
+    /// extract_dependencies_without_self: two‐letter columns
+    #[test]
+    fn sheet_extract_deps_without_self_two_letter() {
+        let deps = extract_dependencies_without_self("AA1:AB2", 100, 100);
+        let mut want = HashSet::new();
+        // AA→col 26, AB→col 27 (0-based)
+        for r in 0..=1 {
+            for c in 26..=27 {
+                want.insert((r, c));
+            }
         }
+        assert_eq!(deps, want);
     }
-    assert_eq!(deps, want);
-}
 
-/// extract_dependencies: simple single + range
-#[test]
-fn sheet_extract_dependencies_basic() {
-    let s = Spreadsheet::new(3, 3);
-    let single = extract_dependencies(&s, "B2");
-    assert_eq!(single, vec![(1, 1)].into_iter().collect());
+    /// extract_dependencies: simple single + range
+    #[test]
+    fn sheet_extract_dependencies_basic() {
+        let s = Spreadsheet::new(3, 3);
+        let single = extract_dependencies(&s, "B2");
+        assert_eq!(single, vec![(1, 1)].into_iter().collect());
 
-    let range = extract_dependencies(&s, "SUM(A1:C1)");
-    let mut want = HashSet::new();
-    for c in 0..3 {
-        want.insert((0, c));
+        let range = extract_dependencies(&s, "SUM(A1:C1)");
+        let mut want = HashSet::new();
+        for c in 0..3 {
+            want.insert((0, c));
+        }
+        assert_eq!(range, want);
     }
-    assert_eq!(range, want);
 }
-
-   
-}
-
-
-

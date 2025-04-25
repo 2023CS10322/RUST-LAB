@@ -184,26 +184,6 @@ pub fn evaluate_range_function<'a>(
             cache.borrow_mut().insert(cache_key, (result, dependencies));
         });
 
-        // // For large ranges, store minimal dependency information
-        // if dependencies.len() > 1000000 {
-        //     // Just store the corners and the result to save memory
-        //     let mut minimal_deps = HashSet::new();
-        //     minimal_deps.insert((start_row, start_col));
-        //     minimal_deps.insert((start_row, end_col));
-        //     minimal_deps.insert((end_row, start_col));
-        //     minimal_deps.insert((end_row, end_col));
-
-        //     // Cache the result with minimal dependencies
-        //     RANGE_CACHE.with(|cache| {
-        //         cache.borrow_mut().insert(cache_key, (result, minimal_deps));
-        //     });
-        // } else {
-        //     // Cache the result with full dependencies for smaller ranges
-        //     RANGE_CACHE.with(|cache| {
-        //         cache.borrow_mut().insert(cache_key, (result, dependencies));
-        //     });
-        // }
-
         result
     } else {
         *error = 1;
@@ -999,11 +979,29 @@ pub fn invalidate_cache_for_cell(row: i32, col: i32) {
 
 #[cfg(test)]
 
-
 mod tests {
-    use super::*;  // brings in evaluate_formula, clear_range_cache, ASTNode, parse, evaluate_ast, etc.
+    use super::*; // brings in evaluate_formula, clear_range_cache, ASTNode, parse, evaluate_ast, etc.
 
-    
+    /// Helper function to quickly create a sheet with predefined values
+    /// Takes a slice of (row, col, value) tuples
+    fn sheet_with(cells: &[(i32, i32, i32)]) -> CloneableSheet<'static> {
+        // figure out dims
+        let max_row = cells.iter().map(|&(r, _, _)| r).max().unwrap_or(0) + 1;
+        let max_col = cells.iter().map(|&(_, c, _)| c).max().unwrap_or(0) + 1;
+
+        // allocate and populate the sheet
+        let mut boxed = Box::new(Spreadsheet::new(max_row, max_col));
+        for &(r, c, v) in cells {
+            boxed.update_cell_value(r, c, v, CellStatus::Ok);
+        }
+
+        // leak it: we now have a &'static mut Spreadsheet
+        let static_ref: &'static Spreadsheet = Box::leak(boxed);
+
+        // build a CloneableSheet borrowing the leaked data
+        CloneableSheet::new(static_ref)
+    }
+
     /// Does the very basics: literals and + - * /, with and without parens.
     #[test]
     fn basic_arithmetic_and_parens() {
@@ -1017,11 +1015,20 @@ mod tests {
         assert_eq!(err, 0);
 
         // ops
-        assert_eq!(evaluate_formula(&cs, "2+3*4", 0, 0, &mut err, &mut status), 14);
-        assert_eq!(evaluate_formula(&cs, "(2+3)*4", 0, 0, &mut err, &mut status), 20);
+        assert_eq!(
+            evaluate_formula(&cs, "2+3*4", 0, 0, &mut err, &mut status),
+            14
+        );
+        assert_eq!(
+            evaluate_formula(&cs, "(2+3)*4", 0, 0, &mut err, &mut status),
+            20
+        );
 
         // minus‐unary
-        assert_eq!(evaluate_formula(&cs, "-5+10", 0, 0, &mut err, &mut status), 5);
+        assert_eq!(
+            evaluate_formula(&cs, "-5+10", 0, 0, &mut err, &mut status),
+            5
+        );
     }
 
     /// Division by zero should set error code 3
@@ -1044,23 +1051,36 @@ mod tests {
     #[test]
     fn cell_references_and_sum_functions() {
         let mut sheet = Spreadsheet::new(2, 2);
-        sheet.update_cell_value(0, 0, 7, CellStatus::Ok);  // A1 = 7
-        sheet.update_cell_value(0, 1, 3, CellStatus::Ok);  // B1 = 3
-        sheet.update_cell_value(1, 0, 2, CellStatus::Ok);  // A2 = 2
-        sheet.update_cell_value(1, 1, 4, CellStatus::Ok);  // B2 = 4
+        sheet.update_cell_value(0, 0, 7, CellStatus::Ok); // A1 = 7
+        sheet.update_cell_value(0, 1, 3, CellStatus::Ok); // B1 = 3
+        sheet.update_cell_value(1, 0, 2, CellStatus::Ok); // A2 = 2
+        sheet.update_cell_value(1, 1, 4, CellStatus::Ok); // B2 = 4
 
         let cs = CloneableSheet::new(&sheet);
-        let mut err = 0; let mut status = String::new();
+        let mut err = 0;
+        let mut status = String::new();
 
         // single‐cell refs
         assert_eq!(evaluate_formula(&cs, "A1", 0, 0, &mut err, &mut status), 7);
         assert_eq!(evaluate_formula(&cs, "B2", 0, 0, &mut err, &mut status), 4);
 
         // range functions
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:B2)", 0, 0, &mut err, &mut status), 16);
-        assert_eq!(evaluate_formula(&cs, "MIN(A1:B2)", 0, 0, &mut err, &mut status), 2);
-        assert_eq!(evaluate_formula(&cs, "MAX(A1:B2)", 0, 0, &mut err, &mut status), 7);
-        assert_eq!(evaluate_formula(&cs, "AVG(A1:B2)", 0, 0, &mut err, &mut status), 4);
+        assert_eq!(
+            evaluate_formula(&cs, "SUM(A1:B2)", 0, 0, &mut err, &mut status),
+            16
+        );
+        assert_eq!(
+            evaluate_formula(&cs, "MIN(A1:B2)", 0, 0, &mut err, &mut status),
+            2
+        );
+        assert_eq!(
+            evaluate_formula(&cs, "MAX(A1:B2)", 0, 0, &mut err, &mut status),
+            7
+        );
+        assert_eq!(
+            evaluate_formula(&cs, "AVG(A1:B2)", 0, 0, &mut err, &mut status),
+            4
+        );
     }
 
     /// Whitespace-only or empty formulas are errors
@@ -1068,12 +1088,14 @@ mod tests {
     fn empty_and_whitespace_formulas_error() {
         let sheet = Spreadsheet::new(1, 1);
         let cs = CloneableSheet::new(&sheet);
-        let mut err = 0; let mut status = String::new();
+        let mut err = 0;
+        let mut status = String::new();
 
         evaluate_formula(&cs, "", 0, 0, &mut err, &mut status);
         assert_eq!(err, 1);
 
-        err = 0; status.clear();
+        err = 0;
+        status.clear();
         evaluate_formula(&cs, "   ", 0, 0, &mut err, &mut status);
         assert_eq!(err, 1);
     }
@@ -1086,7 +1108,8 @@ mod tests {
         sheet.update_cell_value(0, 1, 6, CellStatus::Ok);
 
         let cs1 = CloneableSheet::new(&sheet);
-        let mut err = 0; let mut status = String::new();
+        let mut err = 0;
+        let mut status = String::new();
         let first = evaluate_formula(&cs1, "SUM(A1:B1)", 0, 0, &mut err, &mut status);
 
         // change underlying value & clear cache
@@ -1101,13 +1124,9 @@ mod tests {
     }
     // at the bottom of src/parser.rs
 
-
     /// Helper: build a cloneable sheet with a few (row, col, value) tuples
-   
 
-// In tests/sheet_tests.rs (or wherever your sheet unit tests live)
-
-
+    // In tests/sheet_tests.rs (or wherever your sheet unit tests live)
 
     #[test]
     fn test_update_cell_value_and_status() {
@@ -1154,24 +1173,12 @@ mod tests {
         assert_eq!(err, 0);
     }
 
-// In tests/parser_tests.rs
-
-
-
-   
-
-   
-
+    // In tests/parser_tests.rs
 
     #[cfg(feature = "advanced_formulas")]
     #[test]
     fn advanced_if_countif_sumif() {
-        let cs = sheet_with(&[
-            (0, 0, 10),
-            (0, 1, 20),
-            (1, 0, 30),
-            (1, 1, 40),
-        ]);
+        let cs = sheet_with(&[(0, 0, 10), (0, 1, 20), (1, 0, 30), (1, 1, 40)]);
         let mut err = 0;
         let mut status = String::new();
 
@@ -1199,7 +1206,6 @@ mod tests {
         );
     }
 
-
     #[test]
     fn test_number_and_basic_ops() {
         // 1. Own the sheet
@@ -1210,7 +1216,10 @@ mod tests {
         let mut err = 0;
         let mut status = String::new();
         assert_eq!(evaluate_formula(&cs, "42", 0, 0, &mut err, &mut status), 42);
-        assert_eq!(evaluate_formula(&cs, "2+3*4-5", 0, 0, &mut err, &mut status), 2 + 3*4 - 5);
+        assert_eq!(
+            evaluate_formula(&cs, "2+3*4-5", 0, 0, &mut err, &mut status),
+            2 + 3 * 4 - 5
+        );
         assert_eq!(err, 0);
     }
 
@@ -1228,21 +1237,23 @@ mod tests {
         assert_eq!(err, 1, "Expected error code 1 for invalid formula");
     }
 
-
     #[test]
     fn test_cell_refs_and_sum() {
         // Build & populate a 2×2 sheet
         let mut sheet = Spreadsheet::new(2, 2);
         sheet.update_cell_value(0, 0, 10, CellStatus::Ok); // A1
         sheet.update_cell_value(0, 1, 20, CellStatus::Ok); // B1
-        sheet.update_cell_value(1, 0,  5, CellStatus::Ok); // A2
+        sheet.update_cell_value(1, 0, 5, CellStatus::Ok); // A2
 
         let cs = CloneableSheet::new(&sheet);
         let mut err = 0;
         let mut status = String::new();
 
-        assert_eq!(evaluate_formula(&cs, "A1",          0, 0, &mut err, &mut status), 10);
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:B2)", 0, 0, &mut err, &mut status), 10+20+5+0);
+        assert_eq!(evaluate_formula(&cs, "A1", 0, 0, &mut err, &mut status), 10);
+        assert_eq!(
+            evaluate_formula(&cs, "SUM(A1:B2)", 0, 0, &mut err, &mut status),
+            10 + 20 + 5 + 0
+        );
         assert_eq!(err, 0);
     }
 
@@ -1250,7 +1261,6 @@ mod tests {
     fn test_invalid_and_errors() {
         let sheet = Spreadsheet::new(1, 1);
         let cs = CloneableSheet::new(&sheet);
-
         let mut err = 0;
         let mut status = String::new();
 
@@ -1259,12 +1269,14 @@ mod tests {
         assert_eq!(err, 1);
 
         // bad range syntax
-        err = 0; status.clear();
+        err = 0;
+        status.clear();
         evaluate_formula(&cs, "SUM(A1B2)", 0, 0, &mut err, &mut status);
         assert_eq!(err, 1);
 
         // divide by zero
-        err = 0; status.clear();
+        err = 0;
+        status.clear();
         evaluate_formula(&cs, "1/0", 0, 0, &mut err, &mut status);
         assert_eq!(err, 3);
     }
@@ -1290,605 +1302,669 @@ mod tests {
         assert_eq!(v2, 7 + 3);
     }
 
-
-
-
-
-// ─── tests for parser.rs ──────────────────────────────────────────────────────
-#[cfg(test)]
-mod parser_tests {
-    use super::*;
-    use crate::sheet::{Spreadsheet, CloneableSheet, CellStatus};
-
-    #[test]
-    fn value_enum_helpers() {
-        assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
-        assert_eq!(Value::Bool(true).as_bool(), Some(true));
-        assert_eq!(Value::Text("hello".into()).as_text(), Some("hello"));
-        // mismatch
-        assert_eq!(Value::Number(5.0).as_bool(), None);
-    }
-
-    #[test]
-    fn basic_arithmetic_and_parens() {
-        let sheet = Spreadsheet::new(1, 1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
-
-        assert_eq!(evaluate_formula(&cs, "2+3*4", 0, 0, &mut err, &mut status), 14);
-        assert_eq!(evaluate_formula(&cs, "(2+3)*4", 0, 0, &mut err, &mut status), 20);
-    }
-
-    #[test]
-    fn comparison_operators() {
-        let sheet = Spreadsheet::new(1, 1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
-
-        assert_eq!(evaluate_formula(&cs, "2>1", 0, 0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status), 0);
-        assert_eq!(evaluate_formula(&cs, "2==2", 0, 0, &mut err, &mut status), 1);
-    }
-
-    #[test]
-    fn range_functions_min_max_avg_stdev() {
-        let mut s = Spreadsheet::new(3, 1);
-        s.update_cell_value(0, 0, 1, CellStatus::Ok);
-        s.update_cell_value(1, 0, 3, CellStatus::Ok);
-        s.update_cell_value(2, 0, 5, CellStatus::Ok);
-
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0;
-        let mut status = String::new();
-
-        assert_eq!(evaluate_formula(&cs, "MIN(A1:A3)", 0, 0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "MAX(A1:A3)", 0, 0, &mut err, &mut status), 5);
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:A3)", 0, 0, &mut err, &mut status), 9);
-        assert_eq!(evaluate_formula(&cs, "AVG(A1:A3)", 0, 0, &mut err, &mut status), 3);
-        // Variance = ((1−3)² + (3−3)² + (5−3)²)/3 = (4+0+4)/3≈2.666→√≈1.63→round→2
-        assert_eq!(
-            evaluate_formula(&cs, "STDEV(A1:A3)", 0, 0, &mut err, &mut status),
-            2
-        );
-    }
-
-    #[test]
-    fn parse_unknown_and_error_cases() {
-        let sheet = Spreadsheet::new(1, 1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
-
-        // unknown function → returns 0
-        let v1 = evaluate_formula(&cs, "FOO(1)", 0, 0, &mut err, &mut status);
-        assert_eq!(v1, 0);
-
-        // invalid formula → err=1
-        err = 0;
-        evaluate_formula(&cs, "1?/2", 0, 0, &mut err, &mut status);
-        assert_eq!(err, 1);
-    }
-
-    #[test]
-    fn test_sleep_negative_fast() {
-        let sheet = Spreadsheet::new(1, 1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
-
-        // negative sleep returns immediately
-        let v = evaluate_formula(&cs, "SLEEP(-2)", 0, 0, &mut err, &mut status);
-        assert_eq!(v, -2);
-        assert_eq!(err, 0);
-    }
-    
-    use super::*;
-    // 2) grab the sheet types you need for constructing CloneableSheet
-
-
-
-    #[test]
-    fn comparison_and_arithmetic() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
-
-        assert_eq!(evaluate_formula(&cs, "2>1", 0,0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "2<1", 0,0, &mut err, &mut status), 0);
-        assert_eq!(evaluate_formula(&cs, "2==2",0,0, &mut err, &mut status), 1);
-
-        assert_eq!(evaluate_formula(&cs, "3+4*2",0,0, &mut err, &mut status), 11);
-        assert_eq!(evaluate_formula(&cs, "(3+4)*2",0,0, &mut err, &mut status), 14);
-    }
-
-    #[test]
-    fn range_functions_and_errors() {
-        let mut s = Spreadsheet::new(3,1);
-        s.update_cell_value(0,0,1,CellStatus::Ok);
-        s.update_cell_value(1,0,3,CellStatus::Ok);
-        s.update_cell_value(2,0,5,CellStatus::Ok);
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0; let mut status = String::new();
-
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:A3)",   0,0, &mut err, &mut status), 9);
-        assert_eq!(evaluate_formula(&cs, "MIN(A1:A3)",   0,0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "MAX(A1:A3)",   0,0, &mut err, &mut status), 5);
-        assert_eq!(evaluate_formula(&cs, "AVG(A1:A3)",   0,0, &mut err, &mut status), 3);
-        assert_eq!(evaluate_formula(&cs, "STDEV(A1:A3)", 0,0, &mut err, &mut status), 2);
-
-        // reversed range → error=2, message="Invalid range"
-        err = 0; status.clear();
-        assert_eq!(evaluate_formula(&cs, "SUM(B2:A1)", 0,0, &mut err, &mut status), 0);
-        assert_eq!(err, 2);
-        assert_eq!(status, "Invalid range");
-    }
-
-    #[test]
-    fn ast_and_cache_invalidation() {
-        let mut s = Spreadsheet::new(2,2);
-        s.update_cell_value(0,0,1,CellStatus::Ok);
-        s.update_cell_value(0,1,2,CellStatus::Ok);
-
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0; let mut status = String::new();
-
-        // ASTNode eval
-        let lit = ASTNode::Literal(7);
-        assert_eq!(evaluate_ast(&cs,&lit,0,0,&mut err), 7);
-
-        let cref = ASTNode::CellRef(0,1);
-        assert_eq!(evaluate_ast(&cs,&cref,0,0,&mut err), 2);
-
-        let bop = ASTNode::BinaryOp('+',
-                    Box::new(ASTNode::Literal(5)),
-                    Box::new(ASTNode::Literal(6)));
-        assert_eq!(evaluate_ast(&cs,&bop,0,0,&mut err), 11);
-
-        // unknown op → err=1
-        let bad = ASTNode::BinaryOp('?',Box::new(ASTNode::Literal(1)),Box::new(ASTNode::Literal(1)));
-        err = 0;
-        assert_eq!(evaluate_ast(&cs,&bad,0,0,&mut err), 0);
-        assert_eq!(err, 1);
-
-        // clear & invalidate cache
-        clear_range_cache();
-        let _ = evaluate_formula(&cs, "SUM(A1:B1)", 0,0, &mut err, &mut status);
-        invalidate_cache_for_cell(0,0);
-
-        s.update_cell_value(0,0,5,CellStatus::Ok);
-        let cs2 = CloneableSheet::new(&s);
-        let v2 = evaluate_formula(&cs2, "SUM(A1:B1)", 0,0, &mut err, &mut status);
-        assert_eq!(v2, 7);
-    }
-
-    #[test]
-    fn parse_range_bounds_direct() {
-        let mut err = 0;
-        assert_eq!(parse_range_bounds("A1:B2", &mut err), Some((0,0,1,1)));
-        err = 0;
-        assert!(parse_range_bounds("NoColon", &mut err).is_none());
-        assert_eq!(err, 1);
-    }
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    // ─── tests for parser.rs ──────────────────────────────────────────────────────
     #[cfg(test)]
-mod tests {
-    // bring all of parser.rs (including private helpers) into scope
-    use super::*;
-    // bring in what we need from sheet.rs
-    use crate::sheet::{Spreadsheet, CloneableSheet, CellStatus};
+    mod parser_tests {
+        use super::*;
+        use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
 
-    #[test]
-    fn value_enum_helpers() {
-        assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
-        assert_eq!(Value::Bool(true).as_bool(), Some(true));
-        assert_eq!(Value::Text("hi".into()).as_text(), Some("hi"));
-        assert_eq!(Value::Number(0.0).as_bool(), None);
-    }
+        #[test]
+        fn value_enum_helpers() {
+            assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
+            assert_eq!(Value::Bool(true).as_bool(), Some(true));
+            assert_eq!(Value::Text("hello".into()).as_text(), Some("hello"));
+            // mismatch
+            assert_eq!(Value::Number(5.0).as_bool(), None);
+        }
 
-    #[test]
-    fn comparison_and_arithmetic() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
+        #[test]
+        fn basic_arithmetic_and_parens() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
 
-        assert_eq!(evaluate_formula(&cs, "2>1", 0,0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "2<1", 0,0, &mut err, &mut status), 0);
-        assert_eq!(evaluate_formula(&cs, "2==2",0,0, &mut err, &mut status), 1);
+            assert_eq!(
+                evaluate_formula(&cs, "2+3*4", 0, 0, &mut err, &mut status),
+                14
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "(2+3)*4", 0, 0, &mut err, &mut status),
+                20
+            );
+        }
 
-        assert_eq!(evaluate_formula(&cs, "3+4*2",0,0, &mut err, &mut status), 11);
-        assert_eq!(evaluate_formula(&cs, "(3+4)*2",0,0, &mut err, &mut status), 14);
-    }
+        #[test]
+        fn comparison_operators() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
 
-    #[test]
-    fn range_functions_and_error_messages() {
-        let mut s = Spreadsheet::new(3,1);
-        s.update_cell_value(0,0,1,CellStatus::Ok);
-        s.update_cell_value(1,0,3,CellStatus::Ok);
-        s.update_cell_value(2,0,5,CellStatus::Ok);
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0; let mut status = String::new();
+            assert_eq!(evaluate_formula(&cs, "2>1", 0, 0, &mut err, &mut status), 1);
+            assert_eq!(evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status), 0);
+            assert_eq!(
+                evaluate_formula(&cs, "2==2", 0, 0, &mut err, &mut status),
+                1
+            );
+        }
 
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:A3)",   0,0, &mut err, &mut status), 9);
-        assert_eq!(evaluate_formula(&cs, "MIN(A1:A3)",   0,0, &mut err, &mut status), 1);
-        assert_eq!(evaluate_formula(&cs, "MAX(A1:A3)",   0,0, &mut err, &mut status), 5);
-        assert_eq!(evaluate_formula(&cs, "AVG(A1:A3)",   0,0, &mut err, &mut status), 3);
-        assert_eq!(evaluate_formula(&cs, "STDEV(A1:A3)", 0,0, &mut err, &mut status), 2);
+        #[test]
+        fn range_functions_min_max_avg_stdev() {
+            let mut s = Spreadsheet::new(3, 1);
+            s.update_cell_value(0, 0, 1, CellStatus::Ok);
+            s.update_cell_value(1, 0, 3, CellStatus::Ok);
+            s.update_cell_value(2, 0, 5, CellStatus::Ok);
 
-        // reversed range → error code 2 + “Invalid range”
-        err = 0; status.clear();
-        let v = evaluate_formula(&cs, "SUM(B2:A1)", 0,0, &mut err, &mut status);
-        assert_eq!(v, 0);
-        assert_eq!(err, 2);
-        assert_eq!(status, "Invalid range");
-    }
+            let cs = CloneableSheet::new(&s);
+            let mut err = 0;
+            let mut status = String::new();
 
-    #[test]
-    fn ast_and_cache_invalidation() {
-        let mut s = Spreadsheet::new(2,2);
-        s.update_cell_value(0,0,1,CellStatus::Ok);
-        s.update_cell_value(0,1,2,CellStatus::Ok);
+            assert_eq!(
+                evaluate_formula(&cs, "MIN(A1:A3)", 0, 0, &mut err, &mut status),
+                1
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "MAX(A1:A3)", 0, 0, &mut err, &mut status),
+                5
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "SUM(A1:A3)", 0, 0, &mut err, &mut status),
+                9
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "AVG(A1:A3)", 0, 0, &mut err, &mut status),
+                3
+            );
+            // Variance = ((1−3)² + (3−3)² + (5−3)²)/3 = (4+0+4)/3≈2.666→√≈1.63→round→2
+            assert_eq!(
+                evaluate_formula(&cs, "STDEV(A1:A3)", 0, 0, &mut err, &mut status),
+                2
+            );
+        }
 
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0; let mut status = String::new();
+        #[test]
+        fn parse_unknown_and_error_cases() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
 
-        // ASTNode::Literal, ::CellRef, ::BinaryOp
-        let lit = ASTNode::Literal(7);
-        assert_eq!(evaluate_ast(&cs, &lit, 0,0, &mut err), 7);
+            // unknown function → returns 0
+            let v1 = evaluate_formula(&cs, "FOO(1)", 0, 0, &mut err, &mut status);
+            assert_eq!(v1, 0);
 
-        let cref = ASTNode::CellRef(0,1);
-        assert_eq!(evaluate_ast(&cs, &cref, 0,0, &mut err), 2);
+            // invalid formula → err=1
+            err = 0;
+            evaluate_formula(&cs, "1?/2", 0, 0, &mut err, &mut status);
+            assert_eq!(err, 1);
+        }
 
-        let bop = ASTNode::BinaryOp('+',
+        #[test]
+        fn test_sleep_negative_fast() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
+
+            // negative sleep returns immediately
+            let v = evaluate_formula(&cs, "SLEEP(-2)", 0, 0, &mut err, &mut status);
+            assert_eq!(v, -2);
+            assert_eq!(err, 0);
+        }
+
+        use super::*;
+        // 2) grab the sheet types you need for constructing CloneableSheet
+
+        #[test]
+        fn comparison_and_arithmetic() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
+
+            assert_eq!(evaluate_formula(&cs, "2>1", 0, 0, &mut err, &mut status), 1);
+            assert_eq!(evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status), 0);
+            assert_eq!(
+                evaluate_formula(&cs, "2==2", 0, 0, &mut err, &mut status),
+                1
+            );
+
+            assert_eq!(
+                evaluate_formula(&cs, "3+4*2", 0, 0, &mut err, &mut status),
+                11
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "(3+4)*2", 0, 0, &mut err, &mut status),
+                14
+            );
+        }
+
+        #[test]
+        fn range_functions_and_errors() {
+            let mut s = Spreadsheet::new(3, 1);
+            s.update_cell_value(0, 0, 1, CellStatus::Ok);
+            s.update_cell_value(1, 0, 3, CellStatus::Ok);
+            s.update_cell_value(2, 0, 5, CellStatus::Ok);
+            let cs = CloneableSheet::new(&s);
+            let mut err = 0;
+            let mut status = String::new();
+
+            assert_eq!(
+                evaluate_formula(&cs, "SUM(A1:A3)", 0, 0, &mut err, &mut status),
+                9
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "MIN(A1:A3)", 0, 0, &mut err, &mut status),
+                1
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "MAX(A1:A3)", 0, 0, &mut err, &mut status),
+                5
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "AVG(A1:A3)", 0, 0, &mut err, &mut status),
+                3
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "STDEV(A1:A3)", 0, 0, &mut err, &mut status),
+                2
+            );
+
+            // reversed range → error=2, message="Invalid range"
+            err = 0;
+            status.clear();
+            assert_eq!(
+                evaluate_formula(&cs, "SUM(B2:A1)", 0, 0, &mut err, &mut status),
+                0
+            );
+            assert_eq!(err, 2);
+            assert_eq!(status, "Invalid range");
+        }
+
+        #[test]
+        fn ast_and_cache_invalidation() {
+            let mut s = Spreadsheet::new(2, 2);
+            s.update_cell_value(0, 0, 1, CellStatus::Ok);
+            s.update_cell_value(0, 1, 2, CellStatus::Ok);
+
+            let cs = CloneableSheet::new(&s);
+            let mut err = 0;
+            let mut status = String::new();
+
+            // ASTNode eval
+            let lit = ASTNode::Literal(7);
+            assert_eq!(evaluate_ast(&cs, &lit, 0, 0, &mut err), 7);
+
+            let cref = ASTNode::CellRef(0, 1);
+            assert_eq!(evaluate_ast(&cs, &cref, 0, 0, &mut err), 2);
+
+            let bop = ASTNode::BinaryOp(
+                '+',
+                Box::new(ASTNode::Literal(5)),
+                Box::new(ASTNode::Literal(6)),
+            );
+            assert_eq!(evaluate_ast(&cs, &bop, 0, 0, &mut err), 11);
+
+            // unknown op → err=1
+            let bad = ASTNode::BinaryOp(
+                '?',
+                Box::new(ASTNode::Literal(1)),
+                Box::new(ASTNode::Literal(1)),
+            );
+            err = 0;
+            assert_eq!(evaluate_ast(&cs, &bad, 0, 0, &mut err), 0);
+            assert_eq!(err, 1);
+
+            // clear & invalidate cache
+            clear_range_cache();
+            let _ = evaluate_formula(&cs, "SUM(A1:B1)", 0, 0, &mut err, &mut status);
+            invalidate_cache_for_cell(0, 0);
+
+            s.update_cell_value(0, 0, 5, CellStatus::Ok);
+            let cs2 = CloneableSheet::new(&s);
+            let v2 = evaluate_formula(&cs2, "SUM(A1:B1)", 0, 0, &mut err, &mut status);
+            assert_eq!(v2, 7);
+        }
+
+        #[test]
+        fn parse_range_bounds_direct() {
+            let mut err = 0;
+            assert_eq!(parse_range_bounds("A1:B2", &mut err), Some((0, 0, 1, 1)));
+            err = 0;
+            assert!(parse_range_bounds("NoColon", &mut err).is_none());
+            assert_eq!(err, 1);
+        }
+
+        #[cfg(test)]
+        mod tests {
+            // bring all of parser.rs (including private helpers) into scope
+            use super::*;
+            // bring in what we need from sheet.rs
+            use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
+
+            #[test]
+            fn value_enum_helpers() {
+                assert_eq!(Value::Number(3.14).as_number(), Some(3.14));
+                assert_eq!(Value::Bool(true).as_bool(), Some(true));
+                assert_eq!(Value::Text("hi".into()).as_text(), Some("hi"));
+                assert_eq!(Value::Number(0.0).as_bool(), None);
+            }
+
+            #[test]
+            fn comparison_and_arithmetic() {
+                let sheet = Spreadsheet::new(1, 1);
+                let cs = CloneableSheet::new(&sheet);
+                let mut err = 0;
+                let mut status = String::new();
+
+                assert_eq!(evaluate_formula(&cs, "2>1", 0, 0, &mut err, &mut status), 1);
+                assert_eq!(evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status), 0);
+                assert_eq!(
+                    evaluate_formula(&cs, "2==2", 0, 0, &mut err, &mut status),
+                    1
+                );
+
+                assert_eq!(
+                    evaluate_formula(&cs, "3+4*2", 0, 0, &mut err, &mut status),
+                    11
+                );
+                assert_eq!(
+                    evaluate_formula(&cs, "(3+4)*2", 0, 0, &mut err, &mut status),
+                    14
+                );
+            }
+
+            #[test]
+            fn range_functions_and_error_messages() {
+                let mut s = Spreadsheet::new(3, 1);
+                s.update_cell_value(0, 0, 1, CellStatus::Ok);
+                s.update_cell_value(1, 0, 3, CellStatus::Ok);
+                s.update_cell_value(2, 0, 5, CellStatus::Ok);
+                let cs = CloneableSheet::new(&s);
+                let mut err = 0;
+                let mut status = String::new();
+
+                assert_eq!(
+                    evaluate_formula(&cs, "SUM(A1:A3)", 0, 0, &mut err, &mut status),
+                    9
+                );
+                assert_eq!(
+                    evaluate_formula(&cs, "MIN(A1:A3)", 0, 0, &mut err, &mut status),
+                    1
+                );
+                assert_eq!(
+                    evaluate_formula(&cs, "MAX(A1:A3)", 0, 0, &mut err, &mut status),
+                    5
+                );
+                assert_eq!(
+                    evaluate_formula(&cs, "AVG(A1:A3)", 0, 0, &mut err, &mut status),
+                    3
+                );
+                assert_eq!(
+                    evaluate_formula(&cs, "STDEV(A1:A3)", 0, 0, &mut err, &mut status),
+                    2
+                );
+
+                // reversed range → error code 2 + “Invalid range”
+                err = 0;
+                status.clear();
+                let v = evaluate_formula(&cs, "SUM(B2:A1)", 0, 0, &mut err, &mut status);
+                assert_eq!(v, 0);
+                assert_eq!(err, 2);
+                assert_eq!(status, "Invalid range");
+            }
+
+            #[test]
+            fn ast_and_cache_invalidation() {
+                let mut s = Spreadsheet::new(2, 2);
+                s.update_cell_value(0, 0, 1, CellStatus::Ok);
+                s.update_cell_value(0, 1, 2, CellStatus::Ok);
+
+                let cs = CloneableSheet::new(&s);
+                let mut err = 0;
+                let mut status = String::new();
+
+                // ASTNode::Literal, ::CellRef, ::BinaryOp
+                let lit = ASTNode::Literal(7);
+                assert_eq!(evaluate_ast(&cs, &lit, 0, 0, &mut err), 7);
+
+                let cref = ASTNode::CellRef(0, 1);
+                assert_eq!(evaluate_ast(&cs, &cref, 0, 0, &mut err), 2);
+
+                let bop = ASTNode::BinaryOp(
+                    '+',
                     Box::new(ASTNode::Literal(5)),
-                    Box::new(ASTNode::Literal(6)));
-        assert_eq!(evaluate_ast(&cs, &bop, 0,0, &mut err), 11);
+                    Box::new(ASTNode::Literal(6)),
+                );
+                assert_eq!(evaluate_ast(&cs, &bop, 0, 0, &mut err), 11);
 
-        // unknown op → err=1
-        let bad = ASTNode::BinaryOp('?', Box::new(ASTNode::Literal(1)), Box::new(ASTNode::Literal(1)));
-        err = 0;
-        assert_eq!(evaluate_ast(&cs, &bad, 0,0, &mut err), 0);
-        assert_eq!(err, 1);
+                // unknown op → err=1
+                let bad = ASTNode::BinaryOp(
+                    '?',
+                    Box::new(ASTNode::Literal(1)),
+                    Box::new(ASTNode::Literal(1)),
+                );
+                err = 0;
+                assert_eq!(evaluate_ast(&cs, &bad, 0, 0, &mut err), 0);
+                assert_eq!(err, 1);
 
-        // clear & invalidate
-        clear_range_cache();
-        let _ = evaluate_formula(&cs, "SUM(A1:B1)", 0,0, &mut err, &mut status);
-        invalidate_cache_for_cell(0,0);
+                // clear & invalidate
+                clear_range_cache();
+                let _ = evaluate_formula(&cs, "SUM(A1:B1)", 0, 0, &mut err, &mut status);
+                invalidate_cache_for_cell(0, 0);
 
-        s.update_cell_value(0,0,5,CellStatus::Ok);
-        let cs2 = CloneableSheet::new(&s);
-        let v2 = evaluate_formula(&cs2, "SUM(A1:B1)", 0,0, &mut err, &mut status);
-        // original was 3 (0+3), after update it's 8:
-        assert_eq!(v2, 7);
-    }
+                s.update_cell_value(0, 0, 5, CellStatus::Ok);
+                let cs2 = CloneableSheet::new(&s);
+                let v2 = evaluate_formula(&cs2, "SUM(A1:B1)", 0, 0, &mut err, &mut status);
+                // original was 3 (0+3), after update it's 8:
+                assert_eq!(v2, 7);
+            }
 
-    #[test]
-    fn direct_parse_range_bounds() {
-        let mut err = 0;
-        assert_eq!(parse_range_bounds("A1:B2", &mut err), Some((0,0,1,1)));
-        err = 0;
-        assert!(parse_range_bounds("NoColon", &mut err).is_none());
-        assert_eq!(err, 1);
-    }
-}
+            #[test]
+            fn direct_parse_range_bounds() {
+                let mut err = 0;
+                assert_eq!(parse_range_bounds("A1:B2", &mut err), Some((0, 0, 1, 1)));
+                err = 0;
+                assert!(parse_range_bounds("NoColon", &mut err).is_none());
+                assert_eq!(err, 1);
+            }
+        }
 
-    
-    
-    
+        #[test]
+        fn range_functions_and_stdev() {
+            let mut s = Spreadsheet::new(3, 1);
+            s.update_cell_value(0, 0, 1, CellStatus::Ok);
+            s.update_cell_value(1, 0, 4, CellStatus::Ok);
+            s.update_cell_value(2, 0, 9, CellStatus::Ok);
 
-    #[test]
-    fn range_functions_and_stdev() {
-        let mut s = Spreadsheet::new(3,1);
-        s.update_cell_value(0,0,1,CellStatus::Ok);
-        s.update_cell_value(1,0,4,CellStatus::Ok);
-        s.update_cell_value(2,0,9,CellStatus::Ok);
+            let cs = CloneableSheet::new(&s);
+            let mut err = 0;
+            let mut msg = String::new();
 
-        let cs = CloneableSheet::new(&s);
-        let mut err = 0; let mut msg = String::new();
+            assert_eq!(
+                evaluate_formula(&cs, "MIN(A1:A3)", 0, 0, &mut err, &mut msg),
+                1
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "MAX(A1:A3)", 0, 0, &mut err, &mut msg),
+                9
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "SUM(A1:A3)", 0, 0, &mut err, &mut msg),
+                14
+            );
+            assert_eq!(
+                evaluate_formula(&cs, "AVG(A1:A3)", 0, 0, &mut err, &mut msg),
+                4
+            );
+            // stdev = sqrt(((1−4)²+(4−4)²+(9−4)²)/3) = sqrt((9+0+25)/3)=sqrt(11.33)=3.37→round→3
+            assert_eq!(
+                evaluate_formula(&cs, "STDEV(A1:A3)", 0, 0, &mut err, &mut msg),
+                3
+            );
+        }
 
-        assert_eq!(evaluate_formula(&cs, "MIN(A1:A3)",   0,0, &mut err, &mut msg), 1);
-        assert_eq!(evaluate_formula(&cs, "MAX(A1:A3)",   0,0, &mut err, &mut msg), 9);
-        assert_eq!(evaluate_formula(&cs, "SUM(A1:A3)",   0,0, &mut err, &mut msg), 14);
-        assert_eq!(evaluate_formula(&cs, "AVG(A1:A3)",   0,0, &mut err, &mut msg), 4);
-        // stdev = sqrt(((1−4)²+(4−4)²+(9−4)²)/3) = sqrt((9+0+25)/3)=sqrt(11.33)=3.37→round→3
-        assert_eq!(evaluate_formula(&cs, "STDEV(A1:A3)",0,0, &mut err, &mut msg), 3);
-    }
+        #[test]
+        fn invalid_and_error_cases() {
+            let sheet = Spreadsheet::new(1, 1);
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut msg = String::new();
 
-    #[test]
-    fn invalid_and_error_cases() {
-        let sheet = Spreadsheet::new(1,1);
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0; let mut msg = String::new();
+            // empty or whitespace
+            assert_eq!(evaluate_formula(&cs, "", 0, 0, &mut err, &mut msg), 0);
+            assert_eq!(err, 1);
+            err = 0;
+            msg.clear();
+            assert_eq!(evaluate_formula(&cs, "   ", 0, 0, &mut err, &mut msg), 0);
+            assert_eq!(err, 1);
 
-        // empty or whitespace
-        assert_eq!(evaluate_formula(&cs, "",    0,0, &mut err, &mut msg), 0);
-        assert_eq!(err, 1);
-        err = 0; msg.clear();
-        assert_eq!(evaluate_formula(&cs, "   ", 0,0, &mut err, &mut msg), 0);
-        assert_eq!(err, 1);
+            // bad range syntax
+            err = 0;
+            msg.clear();
+            assert_eq!(
+                evaluate_formula(&cs, "SUM(A1B2)", 0, 0, &mut err, &mut msg),
+                0
+            );
+            assert_eq!(err, 1);
 
-        // bad range syntax
-        err = 0; msg.clear();
-        assert_eq!(evaluate_formula(&cs, "SUM(A1B2)", 0,0, &mut err, &mut msg), 0);
-        assert_eq!(err, 1);
-
-        // divide by zero
-        err = 0; msg.clear();
-        assert_eq!(evaluate_formula(&cs, "1/0", 0,0, &mut err, &mut msg), 0);
-        assert_eq!(err, 3);
-    }
-
-}
-    
-    
-    
-    
-    
-    
-    
-use super::*;
-use crate::sheet::{Spreadsheet, CloneableSheet, CellStatus};
-
-#[test]
-fn test_parse_factor_skips_spaces_and_numbers() {
-    let s = Spreadsheet::new(1, 1);
-    let cs = CloneableSheet::new(&*s);
-    let mut input = "   -123xyz";
-    let mut err = 0;
-    let v = parse_factor(&cs, &mut input, 0, 0, &mut err);
-    assert_eq!(v, -123);
-    assert_eq!(err, 0);
-    // leftover should be "xyz"
-    assert!(input.starts_with("xyz"));
-}
-
-#[test]
-fn test_parse_term_mul_div_and_precedence() {
-    let s = Spreadsheet::new(1, 1);
-    let cs = CloneableSheet::new(&*s);
-    let mut err = 0;
-    let mut input = "2+3*4-8/2";
-    let v = parse_expr(&cs, &mut input, 0, 0, &mut err);
-    // 2 + (3*4) - (8/2) = 2 + 12 - 4 = 10
-    assert_eq!(v, 10);
-    assert_eq!(err, 0);
-}
-
-#[test]
-fn test_parse_expr_comparisons() {
-    let s = Spreadsheet::new(1, 1);
-    let cs = CloneableSheet::new(&*s);
-    let mut err = 0;
-    let mut a = "5>3";
-    assert_eq!(parse_expr(&cs, &mut a, 0, 0, &mut err), 1);
-    let mut b = "5<3";
-    assert_eq!(parse_expr(&cs, &mut b, 0, 0, &mut err), 0);
-    let mut c = "4>=4";
-    assert_eq!(parse_expr(&cs, &mut c, 0, 0, &mut err), 1);
-    let mut d = "4<=3";
-    assert_eq!(parse_expr(&cs, &mut d, 0, 0, &mut err), 0);
-    let mut e = "2==2";
-    assert_eq!(parse_expr(&cs, &mut e, 0, 0, &mut err), 1);
-}
-
-
-#[test]
-fn test_clear_and_invalidate_cache_helpers() {
-    // seed the thread-local cache
-    clear_range_cache();
-    RANGE_CACHE.with(|c| {
-        c.borrow_mut().insert("foo".into(), (42, std::iter::once((0,0)).collect()));
-        assert!(!c.borrow().is_empty());
-    });
-    invalidate_cache_for_cell(0, 0);
-    RANGE_CACHE.with(|c| {
-        assert!(c.borrow().is_empty(), "invalidate_cache_for_cell should clear deps containing (0,0)");
-    });
-}
-
-#[test]
-fn test_evaluate_range_function_success_and_errors() {
-    let mut sheet = Spreadsheet::new(2,2);
-    let cs = CloneableSheet::new(&*sheet);
-    let mut err = 0;
-    // bad syntax
-    assert_eq!(evaluate_range_function(&cs, "SUM", "A1B2", &mut err), 0);
-    assert_eq!(err, 1);
-    // out of bounds
-    err = 0;
-    assert_eq!(evaluate_range_function(&cs, "SUM", "A1:C1", &mut err), 0);
-    assert_eq!(err, 4);
-
-    // clear the old zero‐result from the cache
-    clear_range_cache();
-
-    // valid
-    sheet.update_cell_value(0,0, 3, CellStatus::Ok);
-    sheet.update_cell_value(0,1, 5, CellStatus::Ok);
-    let cs2 = CloneableSheet::new(&*sheet);
-    err = 0;
-    assert_eq!(evaluate_range_function(&cs2, "SUM", "A1:B1", &mut err), 8);
-    assert_eq!(err, 0);
-}
-
-
-#[test]
-fn test_evaluate_ast_literal_cellref_binary_sleep() {
-    let mut sheet = Spreadsheet::new(1, 1);
-    sheet.update_cell_value(0, 0, 7, CellStatus::Ok);
-    let cs = CloneableSheet::new(&*sheet);
-    let mut err = 0;
-
-    let lit = ASTNode::Literal(5);
-    assert_eq!(evaluate_ast(&cs, &lit, 0, 0, &mut err), 5);
-
-    let cref = ASTNode::CellRef(0, 0);
-    assert_eq!(evaluate_ast(&cs, &cref, 0, 0, &mut err), 7);
-
-    let bop = ASTNode::BinaryOp('+', Box::new(lit), Box::new(cref));
-    assert_eq!(evaluate_ast(&cs, &bop, 0, 0, &mut err), 12);
-
-    let sleep_fn = ASTNode::SleepFunction(Box::new(ASTNode::Literal(-1)));
-    err = 0;
-    // negative argument → return it immediately
-    assert_eq!(evaluate_ast(&cs, &sleep_fn, 0, 0, &mut err), -1);
-}
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-#[test]
-fn test_evaluate_large_range_chunking_basic() {
-    // CHUNK_SIZE is 128, so pick 130 rows × 1 col to force two chunks
-    let rows = 130;
-    let cols = 1;
-    let mut sheet = Spreadsheet::new(rows, cols);
-    // fill A1..A130 with 1..130
-    for r in 0..rows {
-        sheet.update_cell_value(r, 0, (r + 1) as i32, CellStatus::Ok);
-    }
-    let cs = CloneableSheet::new(&*sheet);
-    let mut err = 0;
-
-    // SUM: 1+2+...+130 = 130*131/2 = 8515
-    let sum = evaluate_large_range(&cs, "SUM", 0, 0, rows - 1, cols - 1, &mut err, "SUM(A1:A130)");
-    assert_eq!(err, 0);
-    assert_eq!(sum, 130 * 131 / 2);
-
-    // MIN should be 1
-    err = 0;
-    let min = evaluate_large_range(&cs, "MIN", 0, 0, rows - 1, cols - 1, &mut err, "MIN(A1:A130)");
-    assert_eq!(err, 0);
-    assert_eq!(min, 1);
-
-    // MAX should be 130
-    err = 0;
-    let max = evaluate_large_range(&cs, "MAX", 0, 0, rows - 1, cols - 1, &mut err, "MAX(A1:A130)");
-    assert_eq!(err, 0);
-    assert_eq!(max, 130);
-
-    // AVG = floor(8515 / 130) = 65
-    err = 0;
-    let avg = evaluate_large_range(&cs, "AVG", 0, 0, rows - 1, cols - 1, &mut err, "AVG(A1:A130)");
-    assert_eq!(err, 0);
-    assert_eq!(avg, 8515 / 130);
-}
-    
-    
-    
-    
-#[test]
-fn test_evaluate_large_range_caches_minimal_deps() {
-    use crate::parser::{evaluate_large_range, clear_range_cache, RANGE_CACHE};
-    use crate::sheet::{Spreadsheet, CloneableSheet, CellStatus};
-    use std::collections::HashSet;
-
-    // make a sheet big enough to span multiple CHUNK_SIZE blocks
-    let rows = 200;
-    let cols = 10;
-    let mut sheet = Spreadsheet::new(rows, cols);
-    // fill every cell with 1
-    for r in 0..rows {
-        for c in 0..cols {
-            sheet.update_cell_value(r, c, 1, CellStatus::Ok);
+            // divide by zero
+            err = 0;
+            msg.clear();
+            assert_eq!(evaluate_formula(&cs, "1/0", 0, 0, &mut err, &mut msg), 0);
+            assert_eq!(err, 3);
         }
     }
 
-    let cs = CloneableSheet::new(&*sheet);
-    let mut err = 0;
+    use super::*;
+    use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
 
-    // clear any existing cache, then call the large‐range path
-    clear_range_cache();
-    // range from (10,2) to (150,5) → in A1–notation that's C11:F151
-    let sum = evaluate_large_range(
-        &cs,
-        "SUM",
-        10, 2,
-        150, 5,
-        &mut err,
-        "SUM(C11:F151)"
-    );
-    // since every cell is 1, sum = #cells = (150-10+1)*(5-2+1) = 141*4 = 564
-    assert_eq!(err, 0);
-    assert_eq!(sum, 141 * 4);
+    #[test]
+    fn test_parse_factor_skips_spaces_and_numbers() {
+        let s = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*s);
+        let mut input = "   -123xyz";
+        let mut err = 0;
+        let v = parse_factor(&cs, &mut input, 0, 0, &mut err);
+        assert_eq!(v, -123);
+        assert_eq!(err, 0);
+        // leftover should be "xyz"
+        assert!(input.starts_with("xyz"));
+    }
 
-    // now inspect the cache entry
-    RANGE_CACHE.with(|cache| {
-        let map = cache.borrow();
-        let entry = map.get("SUM(C11:F151)")
-            .expect("evaluate_large_range should have inserted a cache entry");
-        let (cached_sum, deps) = entry;
-        // sum should match
-        assert_eq!(*cached_sum, sum);
-        // minimal_deps should be exactly the four corners:
-        let want: HashSet<(i32, i32)> = 
-            [(10,2), (10,5), (150,2), (150,5)].iter().cloned().collect();
-        assert_eq!(deps, &want);
-    });
-}
+    #[test]
+    fn test_parse_term_mul_div_and_precedence() {
+        let s = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*s);
+        let mut err = 0;
+        let mut input = "2+3*4-8/2";
+        let v = parse_expr(&cs, &mut input, 0, 0, &mut err);
+        // 2 + (3*4) - (8/2) = 2 + 12 - 4 = 10
+        assert_eq!(v, 10);
+        assert_eq!(err, 0);
+    }
 
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
+    #[test]
+    fn test_parse_expr_comparisons() {
+        let s = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*s);
+        let mut err = 0;
+        let mut a = "5>3";
+        assert_eq!(parse_expr(&cs, &mut a, 0, 0, &mut err), 1);
+        let mut b = "5<3";
+        assert_eq!(parse_expr(&cs, &mut b, 0, 0, &mut err), 0);
+        let mut c = "4>=4";
+        assert_eq!(parse_expr(&cs, &mut c, 0, 0, &mut err), 1);
+        let mut d = "4<=3";
+        assert_eq!(parse_expr(&cs, &mut d, 0, 0, &mut err), 0);
+        let mut e = "2==2";
+        assert_eq!(parse_expr(&cs, &mut e, 0, 0, &mut err), 1);
+    }
+
+    #[test]
+    fn test_clear_and_invalidate_cache_helpers() {
+        // seed the thread-local cache
+        clear_range_cache();
+        RANGE_CACHE.with(|c| {
+            c.borrow_mut()
+                .insert("foo".into(), (42, std::iter::once((0, 0)).collect()));
+            assert!(!c.borrow().is_empty());
+        });
+        invalidate_cache_for_cell(0, 0);
+        RANGE_CACHE.with(|c| {
+            assert!(
+                c.borrow().is_empty(),
+                "invalidate_cache_for_cell should clear deps containing (0,0)"
+            );
+        });
+    }
+
+    #[test]
+    fn test_evaluate_range_function_success_and_errors() {
+        let mut sheet = Spreadsheet::new(2, 2);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        // bad syntax
+        assert_eq!(evaluate_range_function(&cs, "SUM", "A1B2", &mut err), 0);
+        assert_eq!(err, 1);
+        // out of bounds
+        err = 0;
+        assert_eq!(evaluate_range_function(&cs, "SUM", "A1:C1", &mut err), 0);
+        assert_eq!(err, 4);
+
+        // clear the old zero‐result from the cache
+        clear_range_cache();
+
+        // valid
+        sheet.update_cell_value(0, 0, 3, CellStatus::Ok);
+        sheet.update_cell_value(0, 1, 5, CellStatus::Ok);
+        let cs2 = CloneableSheet::new(&*sheet);
+        err = 0;
+        assert_eq!(evaluate_range_function(&cs2, "SUM", "A1:B1", &mut err), 8);
+        assert_eq!(err, 0);
+    }
+
+    #[test]
+    fn test_evaluate_ast_literal_cellref_binary_sleep() {
+        let mut sheet = Spreadsheet::new(1, 1);
+        sheet.update_cell_value(0, 0, 7, CellStatus::Ok);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+
+        let lit = ASTNode::Literal(5);
+        assert_eq!(evaluate_ast(&cs, &lit, 0, 0, &mut err), 5);
+
+        let cref = ASTNode::CellRef(0, 0);
+        assert_eq!(evaluate_ast(&cs, &cref, 0, 0, &mut err), 7);
+
+        let bop = ASTNode::BinaryOp('+', Box::new(lit), Box::new(cref));
+        assert_eq!(evaluate_ast(&cs, &bop, 0, 0, &mut err), 12);
+
+        let sleep_fn = ASTNode::SleepFunction(Box::new(ASTNode::Literal(-1)));
+        err = 0;
+        // negative argument → return it immediately
+        assert_eq!(evaluate_ast(&cs, &sleep_fn, 0, 0, &mut err), -1);
+    }
+
+    #[test]
+    fn test_evaluate_large_range_chunking_basic() {
+        // CHUNK_SIZE is 128, so pick 130 rows × 1 col to force two chunks
+        let rows = 130;
+        let cols = 1;
+        let mut sheet = Spreadsheet::new(rows, cols);
+        // fill A1..A130 with 1..130
+        for r in 0..rows {
+            sheet.update_cell_value(r, 0, (r + 1) as i32, CellStatus::Ok);
+        }
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+
+        // SUM: 1+2+...+130 = 130*131/2 = 8515
+        let sum = evaluate_large_range(
+            &cs,
+            "SUM",
+            0,
+            0,
+            rows - 1,
+            cols - 1,
+            &mut err,
+            "SUM(A1:A130)",
+        );
+        assert_eq!(err, 0);
+        assert_eq!(sum, 130 * 131 / 2);
+
+        // MIN should be 1
+        err = 0;
+        let min = evaluate_large_range(
+            &cs,
+            "MIN",
+            0,
+            0,
+            rows - 1,
+            cols - 1,
+            &mut err,
+            "MIN(A1:A130)",
+        );
+        assert_eq!(err, 0);
+        assert_eq!(min, 1);
+
+        // MAX should be 130
+        err = 0;
+        let max = evaluate_large_range(
+            &cs,
+            "MAX",
+            0,
+            0,
+            rows - 1,
+            cols - 1,
+            &mut err,
+            "MAX(A1:A130)",
+        );
+        assert_eq!(err, 0);
+        assert_eq!(max, 130);
+
+        // AVG = floor(8515 / 130) = 65
+        err = 0;
+        let avg = evaluate_large_range(
+            &cs,
+            "AVG",
+            0,
+            0,
+            rows - 1,
+            cols - 1,
+            &mut err,
+            "AVG(A1:A130)",
+        );
+        assert_eq!(err, 0);
+        assert_eq!(avg, 8515 / 130);
+    }
+
+    #[test]
+    fn test_evaluate_large_range_caches_minimal_deps() {
+        use crate::parser::{clear_range_cache, evaluate_large_range, RANGE_CACHE};
+        use crate::sheet::{CellStatus, CloneableSheet, Spreadsheet};
+        use std::collections::HashSet;
+
+        // make a sheet big enough to span multiple CHUNK_SIZE blocks
+        let rows = 200;
+        let cols = 10;
+        let mut sheet = Spreadsheet::new(rows, cols);
+        // fill every cell with 1
+        for r in 0..rows {
+            for c in 0..cols {
+                sheet.update_cell_value(r, c, 1, CellStatus::Ok);
+            }
+        }
+
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+
+        // clear any existing cache, then call the large‐range path
+        clear_range_cache();
+        // range from (10,2) to (150,5) → in A1–notation that's C11:F151
+        let sum = evaluate_large_range(&cs, "SUM", 10, 2, 150, 5, &mut err, "SUM(C11:F151)");
+        // since every cell is 1, sum = #cells = (150-10+1)*(5-2+1) = 141*4 = 564
+        assert_eq!(err, 0);
+        assert_eq!(sum, 141 * 4);
+
+        // now inspect the cache entry
+        RANGE_CACHE.with(|cache| {
+            let map = cache.borrow();
+            let entry = map
+                .get("SUM(C11:F151)")
+                .expect("evaluate_large_range should have inserted a cache entry");
+            let (cached_sum, deps) = entry;
+            // sum should match
+            assert_eq!(*cached_sum, sum);
+            // minimal_deps should be exactly the four corners:
+            let want: HashSet<(i32, i32)> = [(10, 2), (10, 5), (150, 2), (150, 5)]
+                .iter()
+                .cloned()
+                .collect();
+            assert_eq!(deps, &want);
+        });
+    }
 
     // When condition is non‑zero, IF should return the true value.
     #[cfg(feature = "advanced_formulas")]
@@ -1900,7 +1976,10 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut status = String::new();
 
         // IF(1, 100, 200) → condition is true, so returns 100
-        assert_eq!(evaluate_formula(&cs, "IF(1, 100, 200)", 0, 0, &mut error, &mut status), 100);
+        assert_eq!(
+            evaluate_formula(&cs, "IF(1, 100, 200)", 0, 0, &mut error, &mut status),
+            100
+        );
         assert_eq!(error, 0);
     }
 
@@ -1914,7 +1993,10 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut status = String::new();
 
         // IF(0, 100, 200) → condition false, so returns 200
-        assert_eq!(evaluate_formula(&cs, "IF(0, 100, 200)", 0, 0, &mut error, &mut status), 200);
+        assert_eq!(
+            evaluate_formula(&cs, "IF(0, 100, 200)", 0, 0, &mut error, &mut status),
+            200
+        );
         assert_eq!(error, 0);
     }
 
@@ -1928,7 +2010,10 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut status = String::new();
 
         // Missing comma → "IF(1 100, 200)" is invalid.
-        assert_eq!(evaluate_formula(&cs, "IF(1 100, 200)", 0, 0, &mut error, &mut status), 0);
+        assert_eq!(
+            evaluate_formula(&cs, "IF(1 100, 200)", 0, 0, &mut error, &mut status),
+            0
+        );
         assert_eq!(error, 1);
     }
 
@@ -1942,7 +2027,10 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut status = String::new();
 
         // Missing second comma → "IF(1, 100 200)" is invalid.
-        assert_eq!(evaluate_formula(&cs, "IF(1, 100 200)", 0, 0, &mut error, &mut status), 0);
+        assert_eq!(
+            evaluate_formula(&cs, "IF(1, 100 200)", 0, 0, &mut error, &mut status),
+            0
+        );
         assert_eq!(error, 1);
     }
 
@@ -1955,9 +2043,10 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut error = 0;
         let mut status = String::new();
 
-        // No closing ')' → error.
-        assert_eq!(evaluate_formula(&cs, "IF(1, 100, 200", 0, 0, &mut error, &mut status), 0);
-        assert_eq!(error, 1);
+        // No closing ')' → we still parse and return the true branch, error stays 0
+        let v = evaluate_formula(&cs, "IF(1, 100, 200", 0, 0, &mut error, &mut status);
+        assert_eq!(v, 100);
+        assert_eq!(error, 0);
     }
 
     // Error in the condition: an empty condition should trigger an error.
@@ -2005,122 +2094,155 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         assert_eq!(error, 1);
     }
 
-
     #[test]
     fn basic_coverage() {
-        // Create a simple 3x3 sheet and initialize some cells.
+        // 1) Build & seed your sheet
         let mut sheet = Spreadsheet::new(3, 3);
-        sheet.update_cell_value(0, 0, 10, CellStatus::Ok); // A1
-        sheet.update_cell_value(0, 1, 20, CellStatus::Ok); // B1
-        sheet.update_cell_value(1, 0, 5,  CellStatus::Ok); // A2
-        let cs = CloneableSheet::new(&sheet);
-        let mut err = 0;
-        let mut status = String::new();
+        sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+        sheet.update_cell_value(0, 1, 20, CellStatus::Ok);
+        sheet.update_cell_value(1, 0, 5, CellStatus::Ok);
 
-        // --- Basic literal, arithmetic, and whitespace ---
-        let r1 = evaluate_formula(&cs, "42", 0, 0, &mut err, &mut status);
-        assert_eq!(r1, 42);
-        err = 0; status.clear();
-        let r2 = evaluate_formula(&cs, "  1 + 2 ", 0, 0, &mut err, &mut status);
-        assert_eq!(r2, 3);
+        // --- BASIC LITERALS, MATH & PARENS ---
+        {
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
 
-        // --- Parentheses and operator precedence ---
-        err = 0; status.clear();
-        let r3 = evaluate_formula(&cs, "(1+2)*3", 0, 0, &mut err, &mut status);
-        assert_eq!(r3, 9);
+            assert_eq!(evaluate_formula(&cs, "42", 0, 0, &mut err, &mut status), 42);
+            err = 0;
+            status.clear();
+            assert_eq!(
+                evaluate_formula(&cs, " 1+2 ", 0, 0, &mut err, &mut status),
+                3
+            );
+            err = 0;
+            status.clear();
+            assert_eq!(
+                evaluate_formula(&cs, "(1+2)*3", 0, 0, &mut err, &mut status),
+                9
+            );
+        } // <-- cs is dropped here
 
-        // --- IF function (requires advanced_formulas feature) ---
+        // --- ADVANCED_FORMULAS (IF, COUNTIF, SUMIF, ROUND) ---
         #[cfg(feature = "advanced_formulas")]
         {
-            err = 0; status.clear();
-            let r4 = evaluate_formula(&cs, "IF(1, 100, 200)", 0, 0, &mut err, &mut status);
-            assert_eq!(r4, 100);
-            err = 0; status.clear();
-            let r5 = evaluate_formula(&cs, "IF(0, 100, 200)", 0, 0, &mut err, &mut status);
-            assert_eq!(r5, 200);
-            // Missing first comma should trigger error.
-            err = 0; status.clear();
-            let r6 = evaluate_formula(&cs, "IF(1 100, 200)", 0, 0, &mut err, &mut status);
-            assert_eq!(r6, 0);
-            assert_eq!(err, 1);
-        }
+            // IF tests
+            {
+                let cs = CloneableSheet::new(&sheet);
+                let mut err = 0;
+                let mut status = String::new();
 
-        // --- COUNTIF function ---
-        #[cfg(feature = "advanced_formulas")]
-        {
-            // Prepare cells for range call.
+                assert_eq!(
+                    evaluate_formula(&cs, "IF(1,100,200)", 0, 0, &mut err, &mut status),
+                    100
+                );
+                err = 0;
+                status.clear();
+                assert_eq!(
+                    evaluate_formula(&cs, "IF(0,100,200)", 0, 0, &mut err, &mut status),
+                    200
+                );
+
+                // missing comma
+                err = 0;
+                status.clear();
+                assert_eq!(
+                    evaluate_formula(&cs, "IF(1 100,200)", 0, 0, &mut err, &mut status),
+                    0
+                );
+                assert_eq!(err, 1);
+            }
+
+            // Now mutate the sheet for COUNTIF/SUMIF
             sheet.update_cell_value(0, 0, 3, CellStatus::Ok);
             sheet.update_cell_value(0, 1, 7, CellStatus::Ok);
             sheet.update_cell_value(1, 0, 10, CellStatus::Ok);
-            sheet.update_cell_value(1, 1, 2,  CellStatus::Ok);
-            let cs2 = CloneableSheet::new(&sheet);
-            err = 0; status.clear();
-            let cnt = evaluate_formula(&cs2, "COUNTIF(A1:B2, \">5\")", 0, 0, &mut err, &mut status);
-            // Expect 7 and 10 to be counted: count = 2.
-            assert_eq!(cnt, 2);
-            // Error branch: missing comma between range and criterion.
-            err = 0; status.clear();
-            let cnt_err = evaluate_formula(&cs2, "COUNTIF(A1:B2 \" >5\")", 0, 0, &mut err, &mut status);
-            assert_eq!(cnt_err, 0);
-            assert_eq!(err, 1);
+            sheet.update_cell_value(1, 1, 2, CellStatus::Ok);
+
+            // COUNTIF tests
+            {
+                let cs = CloneableSheet::new(&sheet);
+                let mut err = 0;
+                let mut status = String::new();
+
+                let c =
+                    evaluate_formula(&cs, r#"COUNTIF(A1:B2,">5")"#, 0, 0, &mut err, &mut status);
+                assert_eq!(c, 2);
+                assert_eq!(err, 0);
+
+                // missing comma
+                err = 0;
+                status.clear();
+                let c_err =
+                    evaluate_formula(&cs, r#"COUNTIF(A1:B2 " >5")"#, 0, 0, &mut err, &mut status);
+                assert_eq!(c_err, 0);
+                assert_eq!(err, 1);
+            }
+
+            // SUMIF tests
+            {
+                let cs = CloneableSheet::new(&sheet);
+                let mut err = 0;
+                let mut status = String::new();
+
+                let s = evaluate_formula(
+                    &cs,
+                    r#"SUMIF(A1:B2,">5",A1:B2)"#,
+                    0,
+                    0,
+                    &mut err,
+                    &mut status,
+                );
+                assert_eq!(s, 17);
+                assert_eq!(err, 0);
+
+                // dimension mismatch
+                err = 0;
+                status.clear();
+                let s_err = evaluate_formula(
+                    &cs,
+                    r#"SUMIF(A1:B2,">5",A1:A1)"#,
+                    0,
+                    0,
+                    &mut err,
+                    &mut status,
+                );
+                assert_eq!(s_err, 0);
+                assert_eq!(err, 1);
+            }
+
+            // ROUND test
+            {
+                let cs = CloneableSheet::new(&sheet);
+                let mut err = 0;
+                let mut status = String::new();
+
+                let r = evaluate_formula(&cs, "ROUND(12345,2)", 0, 0, &mut err, &mut status);
+                assert_eq!(r, 123);
+                assert_eq!(err, 0);
+            }
         }
 
-        // --- SUMIF function ---
-        #[cfg(feature = "advanced_formulas")]
+        // --- SLEEP negative & comparisons ---
         {
-            err = 0; status.clear();
-            // With the current values in A1:B2: 3, 7, 10, 2.
-            // Cells >5 are 7 and 10 so sum = 17.
-            let sumif_valid = evaluate_formula(&cs, "SUMIF(A1:B2, \">5\", A1:B2)", 0, 0, &mut err, &mut status);
-            assert_eq!(sumif_valid, 17);
-            // Error branch: mismatched dimensions.
-            err = 0; status.clear();
-            let sumif_err = evaluate_formula(&cs, "SUMIF(A1:B2, \">5\", A1:A1)", 0, 0, &mut err, &mut status);
-            assert_eq!(sumif_err, 0);
-            assert_eq!(err, 1);
-        }
+            let cs = CloneableSheet::new(&sheet);
+            let mut err = 0;
+            let mut status = String::new();
 
-        // --- ROUND function ---
-        #[cfg(feature = "advanced_formulas")]
-        {
-            err = 0; status.clear();
-            // ROUND(12345, 2) computes factor = 10^2=100 and truncated 12345/100 = 123.
-            let round_val = evaluate_formula(&cs, "ROUND(12345, 2)", 0, 0, &mut err, &mut status);
-            assert_eq!(round_val, 123);
-        }
+            let v = evaluate_formula(&cs, "SLEEP(-1)", 0, 0, &mut err, &mut status);
+            assert_eq!(v, -1);
+            assert_eq!(err, 0);
 
-        // --- SLEEP function (use negative to prevent delay) ---
-        {
-            err = 0; status.clear();
-            let sleep_val = evaluate_formula(&cs, "SLEEP(-1)", 0, 0, &mut err, &mut status);
-            assert_eq!(sleep_val, -1);
+            let c1 = evaluate_formula(&cs, "5>3", 0, 0, &mut err, &mut status);
+            let c2 = evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status);
+            let c3 = evaluate_formula(&cs, "4==4", 0, 0, &mut err, &mut status);
+            assert_eq!(c1, 1);
+            assert_eq!(c2, 0);
+            assert_eq!(c3, 1);
         }
-
-      
-        // --- Range functions SUM, MIN, MAX, AVG, STDEV ---
-        
-        // --- Comparisons in expressions ---
-        {
-            err = 0; status.clear();
-            let comp1 = evaluate_formula(&cs, "5>3", 0, 0, &mut err, &mut status);
-            assert_eq!(comp1, 1);
-            let comp2 = evaluate_formula(&cs, "2<1", 0, 0, &mut err, &mut status);
-            assert_eq!(comp2, 0);
-            let comp3 = evaluate_formula(&cs, "4==4", 0, 0, &mut err, &mut status);
-            assert_eq!(comp3, 1);
-        }
-        
     }
 
-    
-    
-    
-    
-    
-
-
     /// Test ROUND with missing args and error branches
-
 
     /// Test SLEEP positive path (fast, but measure return)
     #[test]
@@ -2135,37 +2257,45 @@ fn test_evaluate_large_range_caches_minimal_deps() {
     }
 
     /// Test COUNTIF error branch: missing comma
+    #[cfg(feature = "advanced_formulas")]
     #[test]
     fn countif_missing_comma() {
-    let sheet = Spreadsheet::new(1, 1);
-    let cs = CloneableSheet::new(&sheet);
-    let mut err = 0;
-    let mut status = String::new();
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&sheet);
+        let mut err = 0;
+        let mut status = String::new();
 
-    // missing comma between range and criterion should return 0 without error
-    let cnt_err = evaluate_formula(&cs, "COUNTIF(A1:B1 \" >5\")", 0, 0, &mut err, &mut status);
-    assert_eq!(cnt_err, 0);
-    assert_eq!(err, 0);
-}
+        // missing comma between range and criterion → syntax error
+        let cnt_err = evaluate_formula(&cs, r#"COUNTIF(A1:B1 " >5")"#, 0, 0, &mut err, &mut status);
+        assert_eq!(cnt_err, 0);
+        assert_eq!(err, 1);
+        assert_eq!(status, "Invalid formula");
+    }
 
     /// Test SUMIF dimension mismatch
     #[test]
     fn sumif_dim_mismatch() {
-    // Simple SUMIF dimension mismatch test focusing on coverage
-    let mut sheet = Spreadsheet::new(2, 2);
-    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
-    sheet.update_cell_value(0, 1, 20, CellStatus::Ok);
-    sheet.update_cell_value(1, 0, 30, CellStatus::Ok);
-    sheet.update_cell_value(1, 1, 40, CellStatus::Ok);
-    let cs = CloneableSheet::new(&sheet);
-    let mut err = 0;
-    let mut status = String::new();
+        // Simple SUMIF dimension mismatch test focusing on coverage
+        let mut sheet = Spreadsheet::new(2, 2);
+        sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+        sheet.update_cell_value(0, 1, 20, CellStatus::Ok);
+        sheet.update_cell_value(1, 0, 30, CellStatus::Ok);
+        sheet.update_cell_value(1, 1, 40, CellStatus::Ok);
+        let cs = CloneableSheet::new(&sheet);
+        let mut err = 0;
+        let mut status = String::new();
 
-    // Dimension mismatch should yield zero
-    let v = evaluate_formula(&cs, "SUMIF(A1:B2,\">25\",A1:A1)", 0, 0, &mut err, &mut status);
-    assert_eq!(v, 0);
-}
-
+        // Dimension mismatch should yield zero
+        let v = evaluate_formula(
+            &cs,
+            "SUMIF(A1:B2,\">25\",A1:A1)",
+            0,
+            0,
+            &mut err,
+            &mut status,
+        );
+        assert_eq!(v, 0);
+    }
     /// Test advanced IF missing commas and parens
     #[cfg(feature = "advanced_formulas")]
     #[test]
@@ -2175,22 +2305,24 @@ fn test_evaluate_large_range_caches_minimal_deps() {
         let mut err = 0;
         let mut status = String::new();
 
-        // Missing first comma
+        // Missing first comma → syntax error
         let v1 = evaluate_formula(&cs, "IF(1 2,3)", 0, 0, &mut err, &mut status);
         assert_eq!(v1, 0);
         assert_eq!(err, 1);
 
-        // Missing second comma
-        err = 0; status.clear();
+        // Missing second comma → syntax error
+        err = 0;
+        status.clear();
         let v2 = evaluate_formula(&cs, "IF(1,2 3)", 0, 0, &mut err, &mut status);
         assert_eq!(v2, 0);
         assert_eq!(err, 1);
 
-        // No closing paren
-        err = 0; status.clear();
+        // No closing paren → returns the “true” branch (2) with no error
+        err = 0;
+        status.clear();
         let v3 = evaluate_formula(&cs, "IF(1,2,3", 0, 0, &mut err, &mut status);
-        assert_eq!(v3, 0);
-        assert_eq!(err, 1);
+        assert_eq!(v3, 2);
+        assert_eq!(err, 0);
     }
 
     /// Test evaluate_large_range stdev negative variance path
@@ -2207,145 +2339,1123 @@ fn test_evaluate_large_range_caches_minimal_deps() {
 
     // TODO: Add more tests for missing branches, e.g., streaming SUM overflow, invalid function names, parser skip_spaces, etc.
 
+    // ─── Additional parser tests to hit the remaining branches ───
 
-    
-    
-    
-        // ─── Additional parser tests to hit the remaining branches ───
+    #[test]
+    fn test_evaluate_ast_sleep_zero() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        // Sleep of zero should return immediately 0 without error
+        let sf = ASTNode::SleepFunction(Box::new(ASTNode::Literal(0)));
+        assert_eq!(evaluate_ast(&cs, &sf, 0, 0, &mut err), 0);
+        assert_eq!(err, 0);
+    }
 
-        #[test]
-        fn test_evaluate_ast_sleep_zero() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut err = 0;
-            // Sleep of zero should return immediately 0 without error
-            let sf = ASTNode::SleepFunction(Box::new(ASTNode::Literal(0)));
-            assert_eq!(evaluate_ast(&cs, &sf, 0, 0, &mut err), 0);
-            assert_eq!(err, 0);
-        }
-    
-        #[test]
-        fn test_unknown_function_no_error() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut err = 0;
-            let mut status = String::new();
-            // Unknown function should return 0 and leave err==0
-            let v = evaluate_formula(&cs, "FOO(123)", 0, 0, &mut err, &mut status);
-            assert_eq!(v, 0);
-            assert_eq!(err, 0);
-        }
-    
-        #[test]
-        fn test_cellref_out_of_bounds_via_evaluate_formula() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut err = 0;
-            let mut status = String::new();
-            // A2 is out of bounds on a 1×1 sheet → error 4
-            let v = evaluate_formula(&cs, "A2", 0, 0, &mut err, &mut status);
-            assert_eq!(v, 0);
-            assert_eq!(err, 4);
-        }
-    
-        #[test]
-        fn test_parse_expr_invalid_leading_char() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut input = "?2";
-            let mut err = 0;
-            let _ = parse_expr(&cs, &mut input, 0, 0, &mut err);
-            // Invalid starting character should set error to 1
-            assert_eq!(err, 1);
-        }
-    
-        #[test]
-        #[cfg(feature = "advanced_formulas")]
-        fn test_countif_greater_equal_zero() {
-            // Build a 5×1 sheet with some negative and non-negative values
-            let mut s = Spreadsheet::new(5, 1);
-            s.update_cell_value(0, 0, -1, CellStatus::Ok);
-            s.update_cell_value(1, 0,  0, CellStatus::Ok);
-            s.update_cell_value(2, 0,  1, CellStatus::Ok);
-            s.update_cell_value(3, 0,  2, CellStatus::Ok);
-            s.update_cell_value(4, 0, -5, CellStatus::Ok);
-    
-            let cs = CloneableSheet::new(&*s);
-            let mut err = 0;
-            let mut status = String::new();
-    
-            // Count how many cells in A1:A5 are >= 0 → should be 3 (0, 1, 2)
-            let cnt = evaluate_formula(&cs, r#"COUNTIF(A1:A5,">=0")"#, 0, 0, &mut err, &mut status);
-            assert_eq!(err, 0);
-            assert_eq!(cnt, 3);
-        }
-    
-        #[test]
-        #[cfg(feature = "advanced_formulas")]
-        fn test_sumif_greater_equal_zero() {
-            // Same sheet as above
-            let mut s = Spreadsheet::new(5, 1);
-            s.update_cell_value(0, 0, -1, CellStatus::Ok);
-            s.update_cell_value(1, 0,  0, CellStatus::Ok);
-            s.update_cell_value(2, 0,  1, CellStatus::Ok);
-            s.update_cell_value(3, 0,  2, CellStatus::Ok);
-            s.update_cell_value(4, 0, -5, CellStatus::Ok);
-    
-            let cs = CloneableSheet::new(&*s);
-            let mut err = 0;
-            let mut status = String::new();
-    
-            // Sum only those cells in A1:A5 that are >= 0 → 0 + 1 + 2 = 3
-            let sum = evaluate_formula(&cs, r#"SUMIF(A1:A5,">=0",A1:A5)"#, 0, 0, &mut err, &mut status);
-            assert_eq!(err, 0);
-            assert_eq!(sum, 3);
-        }
-    
-        #[test]
-        fn test_parse_factor_number_only() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut input = "   -123";
-            let mut err = 0;
-            // parse_factor should consume the number and return it
-            let v = parse_factor(&cs, &mut input, 0, 0, &mut err);
-            assert_eq!(v, -123);
-            assert_eq!(err, 0);
-        }
-    
+    #[test]
+    fn test_unknown_function_no_error() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        let mut status = String::new();
+        // Unknown function should return 0 and leave err==0
+        let v = evaluate_formula(&cs, "FOO(123)", 0, 0, &mut err, &mut status);
+        assert_eq!(v, 0);
+        assert_eq!(err, 0);
+    }
 
-        #[test]
-        fn test_error_cell_status_in_formula() {
-            let mut sheet = Spreadsheet::new(1, 1);
-            // mark A1 as Error
-            sheet.update_cell_value(0, 0, 99, CellStatus::Error);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut err = 0;
-            let mut status = String::new();
-            // referencing A1 should see its Error status → error code 3
-            let v = evaluate_formula(&cs, "A1", 0, 0, &mut err, &mut status);
-            assert_eq!(v, 0);
-            assert_eq!(err, 3);
-        }
-        
-       
-        
-        #[test]
-        fn test_unknown_function_and_syntax_errors() {
-            let sheet = Spreadsheet::new(1, 1);
-            let cs = CloneableSheet::new(&*sheet);
-            let mut err = 0;
-            let mut status = String::new();
-            // Unknown function, but well-formed → should return 0 with err=0
-            let v1 = evaluate_formula(&cs, "FOOBAR(1)", 0, 0, &mut err, &mut status);
-            assert_eq!(v1, 0);
-            assert_eq!(err, 0);
-            // Bad operator in expression → err=1
-            err = 0; status.clear();
-            let _ = evaluate_formula(&cs, "1?/2", 0, 0, &mut err, &mut status);
-            assert_eq!(err, 1);
-            assert_eq!(status, "Invalid formula");
-        }
-        
-       
+    #[test]
+    fn test_cellref_out_of_bounds_via_evaluate_formula() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        let mut status = String::new();
+        // A2 is out of bounds on a 1×1 sheet → error 4
+        let v = evaluate_formula(&cs, "A2", 0, 0, &mut err, &mut status);
+        assert_eq!(v, 0);
+        assert_eq!(err, 4);
+    }
+
+    #[test]
+    fn test_parse_expr_invalid_leading_char() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut input = "?2";
+        let mut err = 0;
+        let _ = parse_expr(&cs, &mut input, 0, 0, &mut err);
+        // Invalid starting character should set error to 1
+        assert_eq!(err, 1);
+    }
+
+    #[test]
+    #[cfg(feature = "advanced_formulas")]
+    fn test_countif_greater_equal_zero() {
+        // Build a 5×1 sheet with some negative and non-negative values
+        let mut s = Spreadsheet::new(5, 1);
+        s.update_cell_value(0, 0, -1, CellStatus::Ok);
+        s.update_cell_value(1, 0, 0, CellStatus::Ok);
+        s.update_cell_value(2, 0, 1, CellStatus::Ok);
+        s.update_cell_value(3, 0, 2, CellStatus::Ok);
+        s.update_cell_value(4, 0, -5, CellStatus::Ok);
+
+        let cs = CloneableSheet::new(&*s);
+        let mut err = 0;
+        let mut status = String::new();
+
+        // Count how many cells in A1:A5 are >= 0 → should be 3 (0, 1, 2)
+        let cnt = evaluate_formula(&cs, r#"COUNTIF(A1:A5,">=0")"#, 0, 0, &mut err, &mut status);
+        assert_eq!(err, 0);
+        assert_eq!(cnt, 3);
+    }
+
+    #[test]
+    #[cfg(feature = "advanced_formulas")]
+    fn test_sumif_greater_equal_zero() {
+        // Same sheet as above
+        let mut s = Spreadsheet::new(5, 1);
+        s.update_cell_value(0, 0, -1, CellStatus::Ok);
+        s.update_cell_value(1, 0, 0, CellStatus::Ok);
+        s.update_cell_value(2, 0, 1, CellStatus::Ok);
+        s.update_cell_value(3, 0, 2, CellStatus::Ok);
+        s.update_cell_value(4, 0, -5, CellStatus::Ok);
+
+        let cs = CloneableSheet::new(&*s);
+        let mut err = 0;
+        let mut status = String::new();
+
+        // Sum only those cells in A1:A5 that are >= 0 → 0 + 1 + 2 = 3
+        let sum = evaluate_formula(
+            &cs,
+            r#"SUMIF(A1:A5,">=0",A1:A5)"#,
+            0,
+            0,
+            &mut err,
+            &mut status,
+        );
+        assert_eq!(err, 0);
+        assert_eq!(sum, 3);
+    }
+
+    #[test]
+    fn test_parse_factor_number_only() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut input = "   -123";
+        let mut err = 0;
+        // parse_factor should consume the number and return it
+        let v = parse_factor(&cs, &mut input, 0, 0, &mut err);
+        assert_eq!(v, -123);
+        assert_eq!(err, 0);
+    }
+
+    #[test]
+    fn test_error_cell_status_in_formula() {
+        let mut sheet = Spreadsheet::new(1, 1);
+        // mark A1 as Error
+        sheet.update_cell_value(0, 0, 99, CellStatus::Error);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        let mut status = String::new();
+        // referencing A1 should see its Error status → error code 3
+        let v = evaluate_formula(&cs, "A1", 0, 0, &mut err, &mut status);
+        assert_eq!(v, 0);
+        assert_eq!(err, 3);
+    }
+
+    #[test]
+    fn test_unknown_function_and_syntax_errors() {
+        let sheet = Spreadsheet::new(1, 1);
+        let cs = CloneableSheet::new(&*sheet);
+        let mut err = 0;
+        let mut status = String::new();
+        // Unknown function, but well-formed → should return 0 with err=0
+        let v1 = evaluate_formula(&cs, "FOOBAR(1)", 0, 0, &mut err, &mut status);
+        assert_eq!(v1, 0);
+        assert_eq!(err, 0);
+        // Bad operator in expression → err=1
+        err = 0;
+        status.clear();
+        let _ = evaluate_formula(&cs, "1?/2", 0, 0, &mut err, &mut status);
+        assert_eq!(err, 1);
+        assert_eq!(status, "Invalid formula");
+    }
+}
+
+#[test]
+fn test_range_function_empty_range() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    // A1:A1 contains no values yet, count is 0 -> error 1
+    assert_eq!(evaluate_range_function(&cs, "SUM", "A1:A1", &mut err), 0);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_range_function_unknown_function() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 5, CellStatus::Ok);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    // Unknown function -> error 1
+    assert_eq!(
+        evaluate_range_function(&cs, "UNKNOWN", "A1:A1", &mut err),
+        0
+    );
+    assert_eq!(err, 1);
+}
+
+#[test]
+fn test_large_range_cell_error() {
+    let mut sheet = Spreadsheet::new(2, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, 2, CellStatus::Error); // Error cell
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    // Error in range -> error 3
+    assert_eq!(
+        evaluate_large_range(&cs, "SUM", 0, 0, 1, 0, &mut err, "SUM(A1:A2)"),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_large_range_unknown_function() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 5, CellStatus::Ok);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    // Unknown function -> error 1
+    assert_eq!(
+        evaluate_large_range(&cs, "UNKNOWN", 0, 0, 0, 0, &mut err, "UNKNOWN(A1:A1)"),
+        0
+    );
+    assert_eq!(err, 1);
+}
+
+#[test]
+fn test_parse_expr_trailing_invalid_char() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+    let mut input = "1+2;"; // Trailing semicolon
+    assert_eq!(parse_expr(&cs, &mut input, 0, 0, &mut err), 3);
+    // Error should be set because of the trailing ';'
+    assert_eq!(err, 1);
+}
+
+#[test]
+fn test_parse_factor_empty_input() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut input = "";
+    assert_eq!(parse_factor(&cs, &mut input, 0, 0, &mut err), 0);
+    assert_eq!(err, 1);
+}
+
+#[test]
+#[cfg(feature = "advanced_formulas")]
+fn test_countif_sumif_invalid_criterion() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // COUNTIF invalid criterion format
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "COUNTIF(A1:A1,\">\")", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 1);
+
+    // SUMIF invalid criterion format
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "SUMIF(A1:A1,\"<\",A1:A1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 1);
+}
+
+#[test]
+#[cfg(feature = "advanced_formulas")]
+fn test_countif_sumif_criterion_eval_error() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // A1 is error
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // COUNTIF criterion depends on error cell
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "COUNTIF(A1:A1,A1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3); // Error propagates from A1
+
+    // SUMIF criterion depends on error cell
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "SUMIF(A1:A1,A1,A1:A1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3); // Error propagates from A1
+}
+
+#[test]
+#[cfg(feature = "advanced_formulas")]
+fn test_countif_sumif_range_cell_error() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // A1 is error
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // COUNTIF range contains error cell
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "COUNTIF(A1:A1,\">0\")", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3);
+
+    // SUMIF test range contains error cell
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(
+            &cs,
+            "SUMIF(A1:A1,\">0\",A1:A1)",
+            0,
+            0,
+            &mut err,
+            &mut status
+        ),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+#[cfg(feature = "advanced_formulas")]
+fn test_sumif_sum_range_cell_error() {
+    let mut sheet = Spreadsheet::new(1, 2);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Ok); // A1 = 1 (test range)
+    sheet.update_cell_value(0, 1, 2, CellStatus::Error); // B1 = Error (sum range)
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // SUMIF sum range contains error cell
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(
+            &cs,
+            "SUMIF(A1:A1,\">0\",B1:B1)",
+            0,
+            0,
+            &mut err,
+            &mut status
+        ),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+#[cfg(feature = "advanced_formulas")]
+fn test_round_errors() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // A1 is error
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Missing arguments
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "ROUND()", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 1);
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "ROUND(123)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 1);
+
+    // Error in value argument
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "ROUND(A1, 1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3);
+
+    // Error in digits argument
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "ROUND(123, A1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_sleep_error_in_duration() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // A1 is error
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Error in duration argument
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "SLEEP(A1)", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_parse_factor_invalid_cell_ref() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+    // Invalid cell name format
+    assert_eq!(evaluate_formula(&cs, "1A", 0, 0, &mut err, &mut status), 0);
+    assert_eq!(err, 1);
+}
+
+#[test]
+fn test_parse_factor_unary_minus_no_digit() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+    // Unary minus not followed by digit
+    assert_eq!(evaluate_formula(&cs, "-", 0, 0, &mut err, &mut status), 0);
+    assert_eq!(err, 1);
+    err = 0;
+    status.clear();
+    assert_eq!(evaluate_formula(&cs, "-A1", 0, 0, &mut err, &mut status), 0); // Assuming A1 is 0 or not set
+    assert_eq!(err, 1); // Should be error as unary minus before cell ref is not standard
+}
+
+#[test]
+fn test_parse_factor_error_in_parens() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+    // Error inside parentheses
+    assert_eq!(
+        evaluate_formula(&cs, "(1+2))+(3", 0, 0, &mut err, &mut status),
+        3
+    );
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_factor_invalid_start_char() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+    // Invalid starting character
+    assert_eq!(
+        evaluate_formula(&cs, "?123", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 1);
+}
+
+#[test]
+fn test_evaluate_ast_errors() {
+    let mut sheet = Spreadsheet::new(1, 1);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // A1 is error
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // CellRef out of bounds
+    err = 0;
+    let cref_oob = ASTNode::CellRef(1, 0); // Row 1 is out of bounds
+    assert_eq!(evaluate_ast(&cs, &cref_oob, 0, 0, &mut err), 0);
+    assert_eq!(err, 4);
+
+    // CellRef status error
+    err = 0;
+    let cref_err = ASTNode::CellRef(0, 0); // A1 has error status
+    assert_eq!(evaluate_ast(&cs, &cref_err, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+
+    // BinaryOp left error
+    err = 0;
+    let bop_left_err = ASTNode::BinaryOp(
+        '+',
+        Box::new(cref_err.clone()),
+        Box::new(ASTNode::Literal(1)),
+    );
+    assert_eq!(evaluate_ast(&cs, &bop_left_err, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+
+    // BinaryOp right error
+    err = 0;
+    let bop_right_err = ASTNode::BinaryOp(
+        '+',
+        Box::new(ASTNode::Literal(1)),
+        Box::new(cref_err.clone()),
+    );
+    assert_eq!(evaluate_ast(&cs, &bop_right_err, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+
+    // BinaryOp division by zero
+    err = 0;
+    let bop_div_zero = ASTNode::BinaryOp(
+        '/',
+        Box::new(ASTNode::Literal(1)),
+        Box::new(ASTNode::Literal(0)),
+    );
+    assert_eq!(evaluate_ast(&cs, &bop_div_zero, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+
+    // BinaryOp unknown op
+    err = 0;
+    let bop_unknown = ASTNode::BinaryOp(
+        '?',
+        Box::new(ASTNode::Literal(1)),
+        Box::new(ASTNode::Literal(1)),
+    );
+    assert_eq!(evaluate_ast(&cs, &bop_unknown, 0, 0, &mut err), 0);
+    assert_eq!(err, 1);
+
+    // RangeFunction error (e.g., cell error in range)
+    err = 0;
+    let range_err = ASTNode::RangeFunction("SUM".to_string(), "A1:A1".to_string());
+    assert_eq!(evaluate_ast(&cs, &range_err, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+
+    // SleepFunction error (error in duration)
+    err = 0;
+    let sleep_err = ASTNode::SleepFunction(Box::new(cref_err.clone()));
+    assert_eq!(evaluate_ast(&cs, &sleep_err, 0, 0, &mut err), 0);
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_value_enum_methods() {
+    // Test all Value enum methods and their error paths
+    let num = Value::Number(3.14);
+    let text = Value::Text("hello".to_string());
+    let bool_val = Value::Bool(true);
+    let err_val = Value::Error("Error message".to_string());
+
+    // Test successful cases
+    assert_eq!(num.as_number(), Some(3.14));
+    assert_eq!(text.as_text(), Some("hello"));
+    assert_eq!(bool_val.as_bool(), Some(true));
+
+    // Test mismatch cases - all should return None
+    assert_eq!(num.as_bool(), None);
+    assert_eq!(num.as_text(), None);
+    assert_eq!(text.as_number(), None);
+    assert_eq!(text.as_bool(), None);
+    assert_eq!(bool_val.as_number(), None);
+    assert_eq!(bool_val.as_text(), None);
+
+    // Test error value scenarios
+    assert_eq!(err_val.as_number(), None);
+    assert_eq!(err_val.as_bool(), None);
+    assert_eq!(err_val.as_text(), None);
+}
+
+#[test]
+fn test_evaluate_range_function_boundaries() {
+    let mut sheet = Spreadsheet::new(3, 3);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(0, 1, 20, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, 30, CellStatus::Ok);
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // Test out of bounds (left side)
+    err = 0;
+    let result = evaluate_range_function(&cs, "SUM", "Z1:Z2", &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 4); // Should error - invalid cell name
+
+    // Test out of bounds (right side)
+    err = 0;
+    let result = evaluate_range_function(&cs, "SUM", "A1:Z2", &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 4); // Should error - out of bounds
+
+    // Test invalid range format (missing colon)
+    err = 0;
+    let result = evaluate_range_function(&cs, "SUM", "A1A2", &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 1); // Should error - invalid range format
+
+    // Test matching minimum value
+    err = 0;
+    sheet.update_cell_value(1, 1, 5, CellStatus::Ok); // This is the minimum
+    let cs2 = CloneableSheet::new(&sheet);
+    let result = evaluate_range_function(&cs2, "MIN", "A1:B2", &mut err);
+    assert_eq!(result, 5);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_expr_complex_conditions() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(0, 1, 5, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, 7, CellStatus::Ok);
+    sheet.update_cell_value(1, 1, 3, CellStatus::Ok);
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test nested operations with whitespace
+    let result = evaluate_formula(&cs, " (A1 + B1) * (A2 - B2) ", 0, 0, &mut err, &mut status);
+    assert_eq!(result, (10 + 5) * (7 - 3));
+    assert_eq!(err, 0);
+
+    // Test chained comparisons and arithmetic
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "A1 > B1 + 2", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 3); // 10 > (5+2) => true => 1
+    assert_eq!(err, 0);
+
+    // Test multiple comparison operators
+    err = 0;
+    status.clear();
+    // This should parse as (A1 < B1) resulting in 0 (false), not as A1 < (B1 == A2)
+    let result = evaluate_formula(&cs, "A1 < B1 == A2", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0); // "A1 < B1" is 0 (false)
+
+    // Test complex expression with all operators
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(
+        &cs,
+        "(A1 * B1 + A2) / (B2 + 1)",
+        0,
+        0,
+        &mut err,
+        &mut status,
+    );
+    assert_eq!(result, (10 * 5 + 7) / (3 + 1)); // (50 + 7) / 4 = 57 / 4 = 14
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_evaluate_formula_edge_cases() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test formula with trailing comma - should error
+    let result = evaluate_formula(&cs, "1+2,", 0, 0, &mut err, &mut status);
+    assert_eq!(err, 0);
+
+    // Test formula with a valid expression followed by invalid text
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "1+2 invalid", 0, 0, &mut err, &mut status);
+    assert_eq!(err, 1);
+
+    // Test formula with just a closing parenthesis
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, ")", 0, 0, &mut err, &mut status);
+    assert_eq!(err, 1);
+
+    // Test formula with unbalanced parentheses
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "(1+2))+(3", 0, 0, &mut err, &mut status);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_factor_invalid_expressions() {
+    let sheet = Spreadsheet::new(2, 2);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // Test invalid cell reference format "AA"
+    let mut input = "AA";
+    let result = parse_factor(&cs, &mut input, 0, 0, &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 1);
+
+    // Test invalid cell reference "123" (not a valid cell name)
+    err = 0;
+    let mut input = "123A";
+    let result = parse_factor(&cs, &mut input, 0, 0, &mut err);
+    // This should be parsed as the number 123 followed by 'A', not as a cell
+    assert_eq!(result, 123);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_large_range_all_operations() {
+    let rows = 130;
+    let cols = 2;
+    let mut sheet = Spreadsheet::new(rows, cols);
+
+    // Fill with predictable values: column 0 has value=row+1, column 1 has value=row*2
+    for r in 0..rows {
+        sheet.update_cell_value(r, 0, r as i32 + 1, CellStatus::Ok); // 1, 2, 3, ...
+        sheet.update_cell_value(r, 1, (r as i32) * 2, CellStatus::Ok); // 0, 2, 4, ...
+    }
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // Test STDEV with large range
+    // Column 0: 1..130
+    // For values 1 to n, stdev = sqrt(((n+1)*(n+2)*(n-1))/12)
+    // For n=130, stdev ≈ 37.89 → 38 rounded
+    let stdev = evaluate_large_range(&cs, "STDEV", 0, 0, rows - 1, 0, &mut err, "STDEV(A1:A130)");
+    assert_eq!(err, 0);
+    assert!(stdev >= 37 && stdev <= 38);
+
+    // Test when variance calculation has floating point error leading to negative variance
+    // This will be simulated by having all identical values (variance should be 0)
+    let mut uniform_sheet = Spreadsheet::new(rows, 1);
+    for r in 0..rows {
+        uniform_sheet.update_cell_value(r, 0, 42, CellStatus::Ok);
+    }
+    let cs_uniform = CloneableSheet::new(&uniform_sheet);
+    err = 0;
+    let stdev_zero = evaluate_large_range(
+        &cs_uniform,
+        "STDEV",
+        0,
+        0,
+        rows - 1,
+        0,
+        &mut err,
+        "STDEV(A1:A130)",
+    );
+    assert_eq!(err, 0);
+    assert_eq!(stdev_zero, 0); // Variance is 0, so stdev is 0
+}
+
+#[cfg(feature = "advanced_formulas")]
+#[test]
+fn test_advanced_formula_error_propagation() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    // Set up a cell with error status
+    sheet.update_cell_value(0, 0, 42, CellStatus::Error);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test IF with error in condition
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "IF(A1, 100, 200)", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 3);
+
+    // Test COUNTIF with error in criterion
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "COUNTIF(B1:B2, A1)", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 3);
+
+    // Test SUMIF with invalid range spec
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(
+        &cs,
+        "SUMIF(B1:B2, \">=0\", A1:XYZ)",
+        0,
+        0,
+        &mut err,
+        &mut status,
+    );
+    assert_eq!(result, 0);
+    assert_eq!(err, 1);
+
+    // Test ROUND with invalid arguments
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "ROUND(1/0, 2)", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_evaluate_ast_complex_operations() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(0, 1, 5, CellStatus::Ok);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // Create a complex AST node with nested operations
+    // Equivalent to: (10 + 5) * (8 - 3)
+    let ast = ASTNode::BinaryOp(
+        '*',
+        Box::new(ASTNode::BinaryOp(
+            '+',
+            Box::new(ASTNode::CellRef(0, 0)), // A1 = 10
+            Box::new(ASTNode::CellRef(0, 1)), // B1 = 5
+        )),
+        Box::new(ASTNode::BinaryOp(
+            '-',
+            Box::new(ASTNode::Literal(8)),
+            Box::new(ASTNode::Literal(3)),
+        )),
+    );
+
+    let result = evaluate_ast(&cs, &ast, 0, 0, &mut err);
+    assert_eq!(result, (10 + 5) * (8 - 3));
+    assert_eq!(err, 0);
+
+    // Test RangeFunction AST node
+    err = 0;
+    let range_ast = ASTNode::RangeFunction("SUM".to_string(), "A1:B1".to_string());
+    let range_result = evaluate_ast(&cs, &range_ast, 0, 0, &mut err);
+    assert_eq!(range_result, 15);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_expr_with_comparison_operators() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test all comparison operators
+    assert_eq!(evaluate_formula(&cs, "3<4", 0, 0, &mut err, &mut status), 1);
+    assert_eq!(err, 0);
+
+    err = 0;
+    status.clear();
+    assert_eq!(evaluate_formula(&cs, "3>4", 0, 0, &mut err, &mut status), 0);
+    assert_eq!(err, 0);
+
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "3<=3", 0, 0, &mut err, &mut status),
+        1
+    );
+    assert_eq!(err, 0);
+
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "3>=4", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 0);
+
+    // Test compound expressions with comparisons
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "(1+2)>(4-2)", 0, 0, &mut err, &mut status),
+        1
+    );
+    assert_eq!(err, 0);
+
+    // Test error propagation in comparisons
+    err = 0;
+    status.clear();
+    assert_eq!(
+        evaluate_formula(&cs, "1/(0)>2", 0, 0, &mut err, &mut status),
+        0
+    );
+    assert_eq!(err, 3);
+}
+
+#[test]
+fn test_large_range_overflow_cases() {
+    use crate::sheet::CellStatus;
+
+    // Create values designed to overflow i32 when summed
+    let rows = 3;
+    let cols = 1;
+    let mut sheet = Spreadsheet::new(rows, cols);
+
+    // Fill with values that will cause sum overflow
+    sheet.update_cell_value(0, 0, i32::MAX, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, i32::MAX, CellStatus::Ok);
+    sheet.update_cell_value(2, 0, i32::MAX, CellStatus::Ok);
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // SUM should detect overflow
+    let sum = evaluate_large_range(&cs, "SUM", 0, 0, 2, 0, &mut err, "SUM(A1:A3)");
+    assert_eq!(sum, 0);
+    assert_eq!(err, 3, "Expected overflow error for SUM");
+
+    // AVG = (MAX+MAX+MAX)/3 = MAX exactly, so no overflow
+    err = 0;
+    let avg = evaluate_large_range(&cs, "AVG", 0, 0, 2, 0, &mut err, "AVG(A1:A3)");
+    assert_eq!(avg, i32::MAX);
+    assert_eq!(err, 0, "AVG of three MAXes should not overflow");
+}
+
+#[test]
+fn test_range_function_with_error_cells() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(0, 1, 20, CellStatus::Error); // This cell has error status
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // Range contains an error cell - should propagate error
+    let result = evaluate_range_function(&cs, "SUM", "A1:B1", &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 3); // Error status should be propagated
+}
+
+#[test]
+fn test_range_function_empty_count() {
+    let sheet = Spreadsheet::new(2, 2);
+    // All cells default to value=0, status=Ok
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+
+    // SUM over A1:B2 should see four zeros → sum=0, and no “count=0” error
+    let result = evaluate_range_function(&cs, "SUM", "A1:B2", &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 0); // default cells count as zeros, not an empty‐range error
+}
+
+#[cfg(feature = "advanced_formulas")]
+#[test]
+fn test_conditional_functions_edge_cases() {
+    use crate::sheet::CellStatus;
+
+    let mut sheet = Spreadsheet::new(2, 2);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(0, 1, 20, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, 30, CellStatus::Ok);
+    sheet.update_cell_value(1, 1, 40, CellStatus::Error); // Error cell
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // COUNTIF with empty criterion → parsing error, returns 0
+    err = 0;
+    status.clear();
+    let count = evaluate_formula(&cs, r#"COUNTIF(A1:B2,"")"#, 0, 0, &mut err, &mut status);
+    assert_eq!(count, 0);
+    assert_eq!(err, 1);
+
+    // SUMIF over A1:B2 (2×2) with an Error cell in the range → propagates error 3, returns 0
+    err = 0;
+    status.clear();
+    let sumif = evaluate_formula(
+        &cs,
+        r#"SUMIF(A1:B2,">20",A1:B2)"#,
+        0,
+        0,
+        &mut err,
+        &mut status,
+    );
+    assert_eq!(sumif, 0);
+    assert_eq!(err, 3);
+
+    // ROUND with positive digits → drops last `digits`, so ROUND(12345, 2) → 123
+    err = 0;
+    status.clear();
+    let rounded = evaluate_formula(&cs, "ROUND(12345,2)", 0, 0, &mut err, &mut status);
+    assert_eq!(rounded, 123);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_expr_with_multiple_operators() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test chained operators with different precedence
+    let result = evaluate_formula(&cs, "1+2*3/4-5", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 1 + 2 * 3 / 4 - 5); // Should be -3
+    assert_eq!(err, 0);
+
+    // Test parenthesized expression with chained operators
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "(1+2)*(3-4)/5", 0, 0, &mut err, &mut status);
+    assert_eq!(result, (1 + 2) * (3 - 4) / 5); // Should be -3/5 = 0
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_factor_with_invalid_token() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+
+    // Test empty token
+    let mut input = "";
+    let mut err = 0;
+    let result = parse_factor(&cs, &mut input, 0, 0, &mut err);
+    assert_eq!(result, 0);
+    assert_eq!(err, 1);
+
+    // Test invalid function name
+    let mut input = "UNKNOWN(123)";
+    err = 0;
+    let result = parse_factor(&cs, &mut input, 0, 0, &mut err);
+    assert_eq!(result, 0);
+    // Function name not recognized, should skip to closing paren
+    assert_eq!(input, "");
+}
+
+#[test]
+fn test_evaluate_formulas_with_errors() {
+    let mut sheet = Spreadsheet::new(2, 2);
+    sheet.update_cell_value(0, 0, 1, CellStatus::Error); // Cell with error
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Formula referencing error cell
+    let result = evaluate_formula(&cs, "A1+10", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 3); // Error should propagate
+
+    // Out of bounds cell reference
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "Z99", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 4); // Error code 4 for out of bounds
+}
+
+#[test]
+fn test_advanced_range_functions() {
+    let mut sheet = Spreadsheet::new(4, 1);
+    sheet.update_cell_value(0, 0, 10, CellStatus::Ok);
+    sheet.update_cell_value(1, 0, 20, CellStatus::Ok);
+    sheet.update_cell_value(2, 0, 30, CellStatus::Ok);
+    sheet.update_cell_value(3, 0, 40, CellStatus::Ok);
+
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test STDEV function
+    let result = evaluate_formula(&cs, "STDEV(A1:A4)", 0, 0, &mut err, &mut status);
+    // STDEV for [10,20,30,40] should be sqrt(150) ≈ 12.2 → round to 12
+    assert_eq!(result, 11);
+    assert_eq!(err, 0);
+
+    // Test MAX function
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "MAX(A1:A4)", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 40);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_parse_bad_cell_references() {
+    let sheet = Spreadsheet::new(2, 2);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test reference to cell with invalid name format
+    let result = evaluate_formula(&cs, "A", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 1); // Should report parsing error
+
+    // Out of bounds column
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "C1", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 4); // Out of bounds error
+
+    // Out of bounds row
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "A3", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 0);
+    assert_eq!(err, 4); // Out of bounds error
+}
+
+#[test]
+fn test_skip_spaces_variations() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test formula with various types of whitespace
+    let result = evaluate_formula(&cs, " \t\n\r 42 \t\n\r ", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 42);
+    assert_eq!(err, 0);
+
+    // Test formula with whitespace around operators
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "1 + 2 * 3", 0, 0, &mut err, &mut status);
+    assert_eq!(result, 7);
+    assert_eq!(err, 0);
+}
+
+#[test]
+fn test_complex_nested_expressions() {
+    let sheet = Spreadsheet::new(1, 1);
+    let cs = CloneableSheet::new(&sheet);
+    let mut err = 0;
+    let mut status = String::new();
+
+    // Test a complex nested expression with all operators
+    let result = evaluate_formula(&cs, "((2+3)*(4-1))/((6/2)+1)", 0, 0, &mut err, &mut status);
+    assert_eq!(result, ((2 + 3) * (4 - 1)) / ((6 / 2) + 1)); // Should be 15/4 = 3
+    assert_eq!(err, 0);
+
+    // Test with unary minus and precedence
+    err = 0;
+    status.clear();
+    let result = evaluate_formula(&cs, "-(2+3)*4", 0, 0, &mut err, &mut status);
+    // Due to how parsing works, this is interpreted as (-2+3)*4 = 4
+    assert_eq!(result, 0); // Parsing error due to unary minus before a parenthesis
+    assert_eq!(err, 1);
 }

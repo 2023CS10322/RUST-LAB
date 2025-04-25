@@ -17,7 +17,7 @@ pub mod cli_app {
     static mut CHECK: bool = false;
 
     // Converts a 0-indexed column number into its corresponding letter string.
-    fn col_to_letters(mut col: i32) -> String {
+    pub fn col_to_letters(mut col: i32) -> String {
         let mut buf = Vec::new();
         loop {
             buf.push(((col % 26) as u8 + b'A') as char);
@@ -31,7 +31,7 @@ pub mod cli_app {
     }
 
     // Clamps vertical viewport.
-    fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
+    pub fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
         if *start_row > total_rows {
             *start_row -= 10;
         } else if *start_row > (total_rows - 10) {
@@ -42,7 +42,7 @@ pub mod cli_app {
     }
 
     // Clamps horizontal viewport.
-    fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
+    pub fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
         if *start_col > total_cols {
             *start_col -= 10;
         } else if *start_col > (total_cols - 10) {
@@ -53,7 +53,7 @@ pub mod cli_app {
     }
 
     // Displays the grid (viewport 10x10).
-    fn display_grid(sheet: &Spreadsheet) {
+    pub fn display_grid(sheet: &Spreadsheet) {
         let start_row = sheet.top_row;
         let start_col = sheet.left_col;
         let mut end_row = start_row + 10;
@@ -90,7 +90,7 @@ pub mod cli_app {
     }
 
     // Displays grid from a specified start.
-    fn display_grid_from(sheet: &Spreadsheet, start_row: i32, start_col: i32) {
+    pub fn display_grid_from(sheet: &Spreadsheet, start_row: i32, start_col: i32) {
         // Calculate max displayable rows/columns
         let mut max_col = start_col + 10;
         if max_col > sheet.total_cols {
@@ -136,7 +136,7 @@ pub mod cli_app {
     }
 
     // Process commands: scrolling, cell assignment, output control.
-    fn process_command(sheet: &mut Spreadsheet, cmd: &str, status_msg: &mut String) {
+    pub fn process_command(sheet: &mut Spreadsheet, cmd: &str, status_msg: &mut String) {
         if cmd == "w" {
             sheet.top_row -= 10;
             clamp_viewport_ve(sheet.total_rows, &mut sheet.top_row);
@@ -307,12 +307,6 @@ pub mod cli_app {
         print!("[{:.1}] ({}) > ", elapsed_time, status_msg);
         io::stdout().flush().unwrap();
 
-        
-        
-        
-        
-        
-        
         let mut cmd = String::new();
         loop {
             cmd.clear();
@@ -325,31 +319,31 @@ pub mod cli_app {
                 // EOF
                 break;
             }
-        
+
             let cmd = cmd.trim();
             // explicit quit
             if cmd == "q" {
                 break;
             }
-        
+
             // 2) Only treat it as a real command if it matches one of your patterns
             let is_scroll = matches!(cmd, "w" | "a" | "s" | "d");
-            let is_jump   = cmd.starts_with("scroll_to ");
+            let is_jump = cmd.starts_with("scroll_to ");
             let is_toggle = cmd == "enable_output" || cmd == "disable_output";
-            let is_cache  = cmd == "clear_cache";
-            let is_history= cmd.contains("history");
-            let is_assign = cmd.contains('=');  // crude but works for A1=3, etc.
-        
-            if !(is_scroll || is_jump || is_toggle || is_cache || is_assign||is_history) {
+            let is_cache = cmd == "clear_cache";
+            let is_history = cmd.contains("history");
+            let is_assign = cmd.contains('='); // crude but works for A1=3, etc.
+
+            if !(is_scroll || is_jump || is_toggle || is_cache || is_assign || is_history) {
                 // garbage (a stray char), skip it
                 continue;
             }
-        
+
             // at this point it’s a real, supported command → process & display
             let start = Instant::now();
             process_command(&mut *sheet, cmd, &mut status_msg);
             elapsed_time = start.elapsed().as_secs_f64();
-        
+
             if sheet.output_enabled {
                 display_grid_from(&sheet, sheet.top_row, sheet.left_col);
             }
@@ -357,7 +351,6 @@ pub mod cli_app {
             io::stdout().flush().unwrap();
             status_msg = "ok".to_string();
         }
-        
     }
 }
 
@@ -1499,5 +1492,177 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::process::exit(1);
         // Alternatively, use compile_error! to fail the build:
         // compile_error!("Please enable either the 'cli_app' or 'gui_app' feature.");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use spreadsheet::parser;
+    use spreadsheet::sheet::{CellStatus, Spreadsheet};
+
+    #[test]
+    fn test_col_to_letters() {
+        // Basic conversion test
+        assert_eq!(crate::cli_app::col_to_letters(0), "A");
+        assert_eq!(crate::cli_app::col_to_letters(25), "Z");
+        assert_eq!(crate::cli_app::col_to_letters(26), "AA");
+        assert_eq!(crate::cli_app::col_to_letters(51), "AZ");
+        assert_eq!(crate::cli_app::col_to_letters(52), "BA");
+        assert_eq!(crate::cli_app::col_to_letters(701), "ZZ");
+        assert_eq!(crate::cli_app::col_to_letters(702), "AAA");
+    }
+
+    #[test]
+    fn test_clamp_viewport() {
+        // Test vertical clamping
+        let mut start_row = 100;
+        let total_rows = 50;
+        crate::cli_app::clamp_viewport_ve(total_rows, &mut start_row);
+        assert_eq!(start_row, 40); // clamp to total_rows - 10
+
+        let mut start_row = 45;
+        let total_rows = 50;
+        crate::cli_app::clamp_viewport_ve(total_rows, &mut start_row);
+        assert_eq!(start_row, 40); // clamp to total_rows - 10
+
+        let mut start_row = -5;
+        let total_rows = 50;
+        crate::cli_app::clamp_viewport_ve(total_rows, &mut start_row);
+        assert_eq!(start_row, 0); // clamp to 0
+
+        // Test horizontal clamping
+        let mut start_col = 100;
+        let total_cols = 50;
+        crate::cli_app::clamp_viewport_hz(total_cols, &mut start_col);
+        assert_eq!(start_col, 40); // clamp to total_cols - 10
+
+        let mut start_col = 45;
+        let total_cols = 50;
+        crate::cli_app::clamp_viewport_hz(total_cols, &mut start_col);
+        assert_eq!(start_col, 40); // clamp to total_cols - 10
+
+        let mut start_col = -5;
+        let total_cols = 50;
+        crate::cli_app::clamp_viewport_hz(total_cols, &mut start_col);
+        assert_eq!(start_col, 0); // clamp to 0
+    }
+
+    #[test]
+    fn test_display_grid_edge_cases() {
+        // Create a sheet with partial viewport
+        let mut sheet = Box::new(Spreadsheet::new(15, 15));
+        sheet.top_row = 8;
+        sheet.left_col = 8;
+
+        // This should display only the remaining rows/cols
+        // This is a no-panic test since output is to console
+        crate::cli_app::display_grid(&sheet);
+
+        // Test display from specific position
+        crate::cli_app::display_grid_from(&sheet, 12, 12); // Near bottom right
+    }
+
+    #[test]
+    fn test_process_command_variants() {
+        let mut sheet = Box::new(Spreadsheet::new(20, 20));
+        let mut status_msg = String::new();
+
+        // Test navigation commands
+        crate::cli_app::process_command(&mut sheet, "w", &mut status_msg);
+        assert_eq!(sheet.top_row, 0); // Can't go above 0
+
+        crate::cli_app::process_command(&mut sheet, "s", &mut status_msg);
+        assert_eq!(sheet.top_row, 10); // Move down by 10
+
+        crate::cli_app::process_command(&mut sheet, "a", &mut status_msg);
+        assert_eq!(sheet.left_col, 0); // Can't go left of 0
+
+        crate::cli_app::process_command(&mut sheet, "d", &mut status_msg);
+        assert_eq!(sheet.left_col, 10); // Move right by 10
+
+        // Test scroll_to command
+        crate::cli_app::process_command(&mut sheet, "scroll_to B5", &mut status_msg);
+        assert_eq!(sheet.top_row, 4); // B5 is at row 4
+        assert_eq!(sheet.left_col, 1); // B5 is at col 1
+
+        // Test invalid scroll_to
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "scroll_to InvalidCell", &mut status_msg);
+        assert_eq!(status_msg, "Invalid cell");
+
+        // Test out-of-bounds scroll_to
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "scroll_to Z99", &mut status_msg);
+        assert_eq!(status_msg, "Cell reference out of bounds");
+
+        // Test output toggle commands
+        sheet.output_enabled = true;
+        crate::cli_app::process_command(&mut sheet, "disable_output", &mut status_msg);
+        assert_eq!(sheet.output_enabled, false);
+
+        crate::cli_app::process_command(&mut sheet, "enable_output", &mut status_msg);
+        assert_eq!(sheet.output_enabled, true);
+
+        // Test cell assignment
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "A1=42", &mut status_msg);
+        assert_eq!(sheet.get_cell_value(0, 0), 42);
+
+        // Test clear_cache command
+        sheet.cache.insert(
+            "test".to_string(),
+            spreadsheet::sheet::CachedRange {
+                value: 42,
+                dependencies: std::collections::HashSet::new(),
+            },
+        );
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "clear_cache", &mut status_msg);
+        assert_eq!(status_msg, "Cache cleared");
+        assert!(sheet.cache.is_empty());
+
+        // Test invalid command
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "invalid_command", &mut status_msg);
+        assert_eq!(status_msg, "unrecognized cmd");
+    }
+
+    #[cfg(feature = "undo_state")]
+    #[test]
+    fn test_undo_redo_commands() {
+        let mut sheet = Box::new(Spreadsheet::new(5, 5));
+        let mut status_msg = String::new();
+
+        // Make a change
+        crate::cli_app::process_command(&mut sheet, "A1=10", &mut status_msg);
+        assert_eq!(sheet.get_cell_value(0, 0), 10);
+
+        // Make another change
+        crate::cli_app::process_command(&mut sheet, "A1=20", &mut status_msg);
+        assert_eq!(sheet.get_cell_value(0, 0), 20);
+
+        // Undo
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "undo", &mut status_msg);
+        assert_eq!(sheet.get_cell_value(0, 0), 10);
+        assert!(status_msg.contains("Undo successful"));
+
+        // Redo
+        status_msg.clear();
+        crate::cli_app::process_command(&mut sheet, "redo", &mut status_msg);
+        assert_eq!(sheet.get_cell_value(0, 0), 20);
+        assert!(status_msg.contains("Redo successful"));
+    }
+
+    #[test]
+    fn test_history_command() {
+        let mut sheet = Box::new(Spreadsheet::new(5, 5));
+        let mut status_msg = String::new();
+
+        // Test history command without feature enabled
+        crate::cli_app::process_command(&mut sheet, "history A1", &mut status_msg);
+        #[cfg(not(feature = "cell_history"))]
+        assert_eq!(status_msg, "Usage: history <CellReference>");
     }
 }
