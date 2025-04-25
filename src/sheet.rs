@@ -1,12 +1,40 @@
+//! Core spreadsheet data model.
+//!
+//! Provides:
+//! - `Cell` and `CellStatus` for individual cells  
+//! - A sparse `Spreadsheet` type with incremental recalculation, undo/redo, and optional history  
+//! - `CachedRange` for storing range computations  
+//! - Formula storage and dependency tracking  
+//! - Utility functions: cell name ↔ coords, range-validation, dependency extraction, topological recalculation  
+//! - A read-only `CloneableSheet` wrapper for parser/evaluator  
+//!
+//! # Example
+//!
+//! ```rust
+//! use spreadsheet::sheet::{Spreadsheet, CellStatus, CloneableSheet};
+//!
+//! let mut sheet = Spreadsheet::new(10, 5);
+//! sheet.update_cell_formula(0, 0, "42", &mut String::new());
+//! let cs = CloneableSheet::new(&*sheet);
+//! assert_eq!(cs.get_cell(0, 0).unwrap().value, 42);
+//! ```
 #![allow(warnings)]
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(PartialEq, Eq, Debug, Clone)]
+/// The status of a cell after evaluation.
+///
+/// - `Ok` means the value is valid  
+/// - `Error` means something went wrong (e.g. divide-by-zero, circular reference)
 pub enum CellStatus {
     Ok,
     Error,
 }
-
+/// Internal representation of a single spreadsheet cell.
+///
+/// Holds the current `value`, an optional `formula_idx` into
+/// `Spreadsheet::formula_storage`, its `status`, plus
+/// `dependencies` and `dependents` for incremental recalculation.
 // Optimize Cell structure by removing redundant fields and using more compact storage
 pub struct Cell {
     pub value: i32,
@@ -24,6 +52,8 @@ pub struct Cell {
 // --- Additions for Undo State ---
 #[cfg(feature = "undo_state")]
 #[derive(Clone, Debug)] // Clone might be useful, Debug for inspection
+/// Captures all the fields of one cell before an edit, so it can be
+/// restored by `undo()` or `redo()`.
 struct PreviousCellState {
     row: i32,
     col: i32,
@@ -45,11 +75,21 @@ const MAX_HISTORY_SIZE: usize = 10;
 const MAX_UNDO_LEVELS: usize = 10; // Set the desired history limit [User Requirement]
 
 #[derive(Clone)]
+/// A cached result of a range-function (`SUM`, `MIN`, etc.),
+/// storing the last computed `value` and which cells it depended on.
 pub struct CachedRange {
     pub value: i32,
     pub dependencies: HashSet<(i32, i32)>,
 }
-
+/// A sparse spreadsheet of size `total_rows × total_cols`.
+///
+/// Cells are stored in a `HashMap<(row,col), Cell>` only when
+/// non-empty.  Supports:
+/// - `update_cell_value` / `update_cell_formula`
+/// - incremental recalculation (`recalc_affected`)  
+/// - range caching (`cache` + `invalidate_cache_for_cell`)  
+/// - undo/redo if `undo_state` feature is enabled  
+/// - history logging if `cell_history` feature is enabled
 pub struct Spreadsheet {
     pub total_rows: i32,
     pub total_cols: i32,
@@ -106,6 +146,9 @@ impl Spreadsheet {
             String::new()
         }
     }
+    /// Create a new empty spreadsheet with the given number of rows and columns.
+    ///
+    /// Initially all cells read as value=0, status=Ok; viewports & output flags default.
     pub fn new(rows: i32, cols: i32) -> Box<Spreadsheet> {
         // Create an empty sparse representation instead of initializing all cells
         Box::new(Spreadsheet {
@@ -131,6 +174,7 @@ impl Spreadsheet {
 
     // --- Additions for Undo State ---
     // --- Helper to capture state (used by undo and redo) ---
+    /// Capture all fields of a cell so it can be restored later.
     #[cfg(feature = "undo_state")] // <-- Update feature name
     pub fn capture_current_cell_state(&self, row: i32, col: i32) -> PreviousCellState {
         // This is essentially the same as capture_previous_state,
@@ -160,8 +204,12 @@ impl Spreadsheet {
     }
 
     // --- End Helper ---
-
+    /// Return the raw formula text for `(row,col)`, or `""` if none.
+    ///
+    /// Used by a UI to populate a formula bar.
     // Helper method to get or create a cell
+    /// Ensure a `Cell` exists at `(row,col)`, inserting a default one if necessary.
+    /// Returns a mutable reference.
     pub fn get_or_create_cell(&mut self, row: i32, col: i32) -> &mut Cell {
         if !self.cells.contains_key(&(row, col)) {
             self.cells.insert(
@@ -180,19 +228,19 @@ impl Spreadsheet {
         }
         self.cells.get_mut(&(row, col)).unwrap()
     }
-
+    /// Read-only helpers: return 0 / Ok for nonexistent cells.
     // Helper method to get cell value (returns 0 for non-existent cells)
     pub fn get_cell_value(&self, row: i32, col: i32) -> i32 {
         self.cells.get(&(row, col)).map_or(0, |cell| cell.value)
     }
-
+    /// Return the `CellStatus` or `Ok` if the cell is missing.
     // Helper method to get cell status (returns Ok for non-existent cells)
     pub fn get_cell_status(&self, row: i32, col: i32) -> CellStatus {
         self.cells
             .get(&(row, col))
             .map_or(CellStatus::Ok, |cell| cell.status.clone())
     }
-
+    /// If `(row,col)` has a formula, return it as `Some(String)`, else `None`.
     // Helper to get formula string
     pub fn get_formula(&self, row: i32, col: i32) -> Option<String> {
         if let Some(cell) = self.cells.get(&(row, col)) {
@@ -202,7 +250,9 @@ impl Spreadsheet {
         }
         None
     }
-
+    /// Overwrite the cell’s `value` and `status`.
+    ///
+    /// If `cell_history` is enabled, push the old value onto its history buffer.
     // Helper to update cell value and potentially its history
     pub fn update_cell_value(
         &mut self,
@@ -230,13 +280,19 @@ impl Spreadsheet {
         cell.status = new_status;
     }
     // Add getter for cell history if feature enabled
+    /// Return the last N values this cell held, most recent last.
     #[cfg(feature = "cell_history")]
     pub fn get_cell_history(&self, row: i32, col: i32) -> Option<Vec<i32>> {
         self.cells
             .get(&(row, col))
             .map(|cell| cell.history.iter().cloned().collect())
     }
-
+    /// Parse-and-apply a new formula at `(row,col)`, updating dependencies,
+    /// invalidating cache, marking dirty, and immediate recalculation cascade.
+    ///  
+    /// - Captures undo state if enabled  
+    /// - Checks for circular references and restores on error  
+    /// - Sets `status_msg` to describe any failure  
     // Update cell formula (rewritten to use the sparse representation)
     pub fn update_cell_formula(
         &mut self,
@@ -253,6 +309,7 @@ impl Spreadsheet {
         //     self.redo_state = None; // Any new edit invalidates the redo history
         // }
         // Capture state BEFORE any modification, only if feature is enabled
+        /// Revert the most recent cell-edit, pushing the reverse state onto redo.
         #[cfg(feature = "undo_state")]
         let captured_prev_state = self.capture_current_cell_state(row, col);
         // --- End Additions ---
@@ -475,6 +532,7 @@ impl Spreadsheet {
         }
     }
     // --- Apply a captured state (Helper for Undo/Redo) ---
+    /// Restore one `PreviousCellState`, re-wiring dependencies and recalculating.
     #[cfg(feature = "undo_state")] // <-- Update feature name
     pub fn apply_state(&mut self, state_to_apply: &PreviousCellState, status_msg: &mut String) {
         let row = state_to_apply.row;
@@ -549,6 +607,7 @@ impl Spreadsheet {
 
     // --- Modify Redo Method for multi-level ---
     #[cfg(feature = "undo_state")]
+    /// Re-apply the last undone edit, pushing state back onto undo.
     pub fn redo(&mut self, status_msg: &mut String) {
         status_msg.clear();
 
@@ -566,7 +625,6 @@ impl Spreadsheet {
 
             // Apply the redone state using the helper
             self.apply_state(&state_to_redo, status_msg);
-
             if status_msg.is_empty() || status_msg == "Ok" {
                 status_msg.clear();
                 status_msg.push_str("Redo successful");
@@ -579,6 +637,7 @@ impl Spreadsheet {
 }
 
 // Utility: converts cell name (e.g. "A1") to (row, col).
+/// Convert `"A1"` → `(0,0)`, `"AA10"` → `(9,26)`, or `None` if invalid.
 pub fn cell_name_to_coords(name: &str) -> Option<(i32, i32)> {
     let mut pos = 0;
     let mut col_val = 0;
@@ -607,12 +666,13 @@ pub fn cell_name_to_coords(name: &str) -> Option<(i32, i32)> {
     }
     Some((row_val - 1, col))
 }
-
+/// Trim whitespace from a `String` in place.
 // Trims a string in place.
 pub fn trim(s: &mut String) {
     *s = s.trim().to_string();
 }
-
+/// Check basic formula syntax (numbers, cell refs, built-ins) and
+/// set `status_msg` on failure. Returns `0` if syntactically OK.
 // Validates a formula.
 pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String) -> i32 {
     status_msg.clear();
@@ -765,7 +825,7 @@ pub fn valid_formula(sheet: &Spreadsheet, formula: &str, status_msg: &mut String
     status_msg.push_str("Invalid formula format");
     1
 }
-
+/// Scan a formula and return every `(row,col)` it mentions, expanding ranges.
 // Optimized: Extract dependencies from a formula using HashSet
 pub fn extract_dependencies(sheet: &Spreadsheet, formula: &str) -> HashSet<(i32, i32)> {
     let mut deps: HashSet<(i32, i32)> = HashSet::new();
@@ -869,7 +929,7 @@ pub fn has_circular_dependency(sheet: &Spreadsheet, row: i32, col: i32) -> bool 
 
     false
 }
-
+/// Convert `(row,col)` → `"A1"`, `"AA10"`, zero-based inputs.
 // Converts (row, col) to cell name.
 pub fn coords_to_cell_name(row: i32, col: i32) -> String {
     let mut n = col + 1;
@@ -882,7 +942,8 @@ pub fn coords_to_cell_name(row: i32, col: i32) -> String {
     let col_name: String = col_str.chars().rev().collect();
     format!("{}{}", col_name, row + 1)
 }
-
+/// Perform a topological batch-based recalculation of all `dirty_cells`,
+/// updating values, statuses, and `status_msg` on the first error encountered.
 // Optimized: Recalculate affected cells using topological sort with batching
 pub fn recalc_affected(sheet: &mut Spreadsheet, status_msg: &mut String) {
     if sheet.dirty_cells.is_empty() {
@@ -1187,7 +1248,8 @@ pub fn extract_dependencies_without_self(
 //     // Fall back to standard extraction for other formulas
 //     extract_dependencies_without_self(formula, total_rows, total_cols)
 // }
-
+/// DFS from `(row,col)`, marking that cell and all downstream dependents
+/// as `Error` with `value = 0`.
 // Marks a cell and its dependents as error
 pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col: i32) {
     let mut stack = vec![(row, col)];
@@ -1214,6 +1276,8 @@ pub fn mark_cell_and_dependents_as_error(sheet: &mut Spreadsheet, row: i32, col:
 }
 
 // Create a cloneable wrapper to avoid borrowing issues
+/// A read-only wrapper for parser/evaluator that only exposes `get_cell`,
+/// `total_rows`, and `total_cols`.
 #[derive(Clone)]
 pub struct CloneableSheet<'a> {
     sheet: &'a Spreadsheet,
@@ -1283,7 +1347,7 @@ pub fn has_circular_dependency_by_index(sheet: &Spreadsheet, row: i32, col: i32)
 
     false
 }
-
+/// Mark `(row,col)` and its dependents dirty so they’ll be re-evaluated.
 // More memory-efficient dirty cells handling
 pub fn mark_cell_and_dependents_dirty(sheet: &mut Spreadsheet, row: i32, col: i32) {
     // For large spreadsheets, avoid excessive memory usage

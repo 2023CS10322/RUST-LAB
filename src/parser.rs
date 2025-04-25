@@ -1,3 +1,27 @@
+//! Formula parser and evaluator.
+//!
+//! This module provides:
+//! - An AST (`ASTNode`) for representing formulas  
+//! - A recursive-descent parser (`parse_expr`, `parse_term`, `parse_factor`)  
+//! - A runtime evaluator (`evaluate_formula`, `evaluate_ast`)  
+//! - Built-in functions: `SUM`, `MIN`, `MAX`, `AVG`, `STDEV`, plus feature-gated `IF`, `COUNTIF`, `SUMIF`, `ROUND`, `SLEEP`  
+//! - A thread-local range cache with `evaluate_range_function`, `evaluate_large_range`, `clear_range_cache`, `invalidate_cache_for_cell`  
+//!
+//! # Examples
+//!
+//! ```rust
+//! use spreadsheet::parser::{evaluate_formula, clear_range_cache};
+//! use spreadsheet::sheet::{CloneableSheet, Spreadsheet, CellStatus};
+//!
+//! let mut sheet = Spreadsheet::new(2,2);
+//! sheet.update_cell_value(0,0,10, CellStatus::Ok);
+//! sheet.update_cell_value(0,1,20, CellStatus::Ok);
+//! let cs = CloneableSheet::new(&sheet);
+//! let mut err = 0;
+//! let mut status = String::new();
+//! assert_eq!(evaluate_formula(&cs, "SUM(A1:B1)", 0, 0, &mut err, &mut status), 30);
+//! clear_range_cache();
+//! ```
 #![allow(warnings)]
 use crate::sheet::cell_name_to_coords;
 use crate::sheet::{CachedRange, CellStatus, CloneableSheet, Spreadsheet};
@@ -6,6 +30,14 @@ use std::thread::sleep;
 use std::time::Duration;
 
 // Define the AST node enum for formula parsing
+/// A dynamically-typed value returned by some formula extensions (not yet wired into the
+/// core evaluator).
+///
+/// # Variants
+/// - `Number(f64)` — a floating-point number  
+/// - `Text(String)` — a string  
+/// - `Bool(bool)` — a boolean  
+/// - `Error(String)` — an error message
 pub enum Value {
     Number(f64),
     Text(String),
@@ -14,6 +46,7 @@ pub enum Value {
 }
 
 impl Value {
+    /// If this is a `Number(n)`, returns `Some(n)`, otherwise `None`.
     pub fn as_number(&self) -> Option<f64> {
         if let Value::Number(n) = self {
             Some(*n)
@@ -21,6 +54,7 @@ impl Value {
             None
         }
     }
+    /// If this is a `Bool(b)`, returns `Some(b)`, otherwise `None`.
     pub fn as_bool(&self) -> Option<bool> {
         if let Value::Bool(b) = self {
             Some(*b)
@@ -28,6 +62,7 @@ impl Value {
             None
         }
     }
+    /// If this is a `Text(s)`, returns `Some(&s)`, otherwise `None`.
     pub fn as_text(&self) -> Option<&str> {
         if let Value::Text(s) = self {
             Some(s)
@@ -38,11 +73,19 @@ impl Value {
 }
 
 #[derive(Clone, Debug)]
+/// An abstract syntax tree node for a pre-built formula expression.
+///
+/// You can construct an AST manually and evaluate it with `evaluate_ast`.
 pub enum ASTNode {
+    /// A literal integer.
     Literal(i32),
+    /// A cell reference, e.g., "A1" or "B2".
     CellRef(i32, i32),
+    /// A binary operation, e.g., "A1 + B2".
     BinaryOp(char, Box<ASTNode>, Box<ASTNode>),
+    /// A range function, e.g., "SUM(A1:B2)".
     RangeFunction(String, String), // Function name and range string
+    /// A sleep function, e.g., "SLEEP(5)".
     SleepFunction(Box<ASTNode>),
 }
 
@@ -61,7 +104,14 @@ fn skip_spaces(input: &mut &str) {
         }
     }
 }
-
+/// Compute `func_name(range_str)` (e.g. `"SUM"`, `"MIN"`, `"MAX"`, `"AVG"`, `"STDEV"`) over
+/// the cells in `range_str` (e.g. `"A1:B3"`), using a thread-local cache.
+///
+/// # Errors
+/// - `error = 1`: syntax or empty range  
+/// - `error = 2`: start > end  
+/// - `error = 3`: found a cell with `Error` status  
+/// - `error = 4`: out-of-bounds reference  
 pub fn evaluate_range_function<'a>(
     sheet: &CloneableSheet<'a>,
     func_name: &str,
@@ -190,7 +240,8 @@ pub fn evaluate_range_function<'a>(
         0
     }
 }
-
+/// Same as `evaluate_range_function` but processes very large ranges in 128×128 chunks
+/// (avoiding excessive memory), and caches only corner dependencies.
 // New function to handle large ranges more efficiently
 pub fn evaluate_large_range<'a>(
     sheet: &CloneableSheet<'a>,
@@ -299,7 +350,8 @@ pub fn evaluate_large_range<'a>(
 
     result
 }
-
+/// Parse a full expression (handling `+ -`, comparisons `> < >= <= ==`, and trailing `) ,`).
+/// Returns the computed integer, or 0 with `*error != 0`.
 pub fn parse_expr<'a>(
     sheet: &CloneableSheet<'a>,
     input: &mut &str,
@@ -393,7 +445,7 @@ pub fn parse_expr<'a>(
 
     value
 }
-
+/// Parse a term (handling `*` and `/`, with divide-by-zero → `error=3`).
 pub fn parse_term<'a>(
     sheet: &CloneableSheet<'a>,
     input: &mut &str,
@@ -439,7 +491,8 @@ fn parse_range_bounds(s: &str, error: &mut i32) -> Option<(i32, i32, i32, i32)> 
     *error = 1;
     None
 }
-
+/// Parse a factor: number literal, parenthesized sub-expression, cell ref, or function call.
+/// Sets `error=1` on syntax errors.
 pub fn parse_factor<'a>(
     sheet: &CloneableSheet<'a>,
     input: &mut &str,
@@ -912,7 +965,27 @@ pub fn evaluate_ast<'a>(
         }
     }
 }
-
+/// Parse and evaluate a formula string in the context of `sheet` at `(current_row, current_col)`.
+///
+/// # Parameters
+/// - `formula`: the raw string (without leading `=`)  
+/// - `error`: set to:
+///     - `0` on success  
+///     - `1` invalid syntax  
+///     - `2` invalid range  
+///     - `3` runtime error (e.g. divide-by-zero)  
+/// - `status_msg`: human-readable message for range/rustc errors  
+///
+/// # Examples
+///
+/// ```
+/// # use spreadsheet::sheet::{Spreadsheet, CloneableSheet, CellStatus};
+/// # use spreadsheet::parser::evaluate_formula;
+/// let mut s = Spreadsheet::new(1,1);
+/// let cs = CloneableSheet::new(&s);
+/// let mut err = 0; let mut msg = String::new();
+/// assert_eq!(evaluate_formula(&cs, "2+2", 0,0, &mut err, &mut msg), 4);
+/// ```
 /// Public API: evaluate_formula
 pub fn evaluate_formula<'a>(
     sheet: &CloneableSheet<'a>,
@@ -945,14 +1018,14 @@ pub fn evaluate_formula<'a>(
     }
     result
 }
-
+/// Wipe the entire thread-local range cache.
 // Function to clear the thread-local cache
 pub fn clear_range_cache() {
     RANGE_CACHE.with(|cache| {
         cache.borrow_mut().clear();
     });
 }
-
+/// Remove any cached range results whose dependencies include `(row, col)`.
 // Add a function to invalidate cache entries for a specific cell
 pub fn invalidate_cache_for_cell(row: i32, col: i32) {
     RANGE_CACHE.with(|cache| {

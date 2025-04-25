@@ -1,13 +1,54 @@
+//! A tiny, embeddable spreadsheet engine in pure Rust.
+//! 
+//! # Features
+//! 
+//! - Sparse storage for large grids
+//! - Formula evaluation with `SUM`, `IF`, `COUNTIF`, etc.
+//! - Multi-level undo/redo and cell history (behind features)
+//! # Rust Spreadsheet Lab
+//!
+//! # spreadsheet
+//!
+//! A tiny, embeddable spreadsheet engine in pure Rust.
+//! 
+//! ## Features
+//! - Sparse storage
+//! - Formula evaluation (`SUM`, `IF`, `COUNTIF`, …)
+//! - Optional undo/redo & cell history
+//! This crate implements the COP290 spreadsheet in safe, idiomatic Rust,
+//! with both CLI and optional GUI front-ends, formula parsing, undo/redo,
+//! history logging, and an interactive chart GUI.
+//!
+//! ## Core Modules
+//!  - [`parser`] — parse and evaluate formulas  
+//!  - [`sheet`]  — manage cells, dependencies, and recalculation  
+//!  - [`cli_app`] / [`gui_app`] — front-ends for terminal and GUI  
 #![allow(warnings)]
 pub mod parser;
+/// The `parser` module handles lexical analysis, recursive-descent parsing,
+/// and evaluation of spreadsheet formulas (SUM, IF, COUNTIF, etc.).
+/// Public API:
+/// - `evaluate_formula`  
+/// - `clear_range_cache`  
+/// - `invalidate_cache_for_cell`
 pub mod sheet;
-
+/// The `sheet` module manages the grid of [`Cell`]s, dependency graphs,
+/// incremental recalculation (topological sort), undo/redo stacks,
+/// and viewport scrolling.
 // Export the CLI functions for tests to use
 #[cfg(feature = "cli_app")]
 pub mod cli_app {
+     //! A lightweight CLI front-end for testing and autograder compatibility.
+    //! Exposes viewport scrolling, cell assignment, cache clearing,
+    //! undo/redo, and history commands.
     use crate::parser::*;
     use crate::sheet::*;
-    // Direct implementation of the functions needed for testing
+    /// ```rust
+/// // import from your crate
+/// use spreadsheet::cli_app::col_to_letters;
+///
+/// assert_eq!(col_to_letters(0), "A");
+/// assert_eq!(col_to_letters(26), "AA");
     pub fn col_to_letters(mut col: i32) -> String {
         let mut buf = Vec::new();
         loop {
@@ -20,6 +61,9 @@ pub mod cli_app {
         buf.reverse();
         buf.into_iter().collect()
     }
+    /// Clamp the vertical viewport start row to [0, total_rows − height]
+    ///
+    /// On out-of-bounds, pulls the view back by 10 or to zero.
     pub fn clamp_viewport_ve(total_rows: i32, start_row: &mut i32) {
         if *start_row > total_rows {
             *start_row -= 10;
@@ -29,7 +73,21 @@ pub mod cli_app {
             *start_row = 0;
         }
     }
-
+    /// Clamp a horizontal viewport coordinate so it stays within `[0..max_col]`.
+    /// Clamp a column index so it never runs off the left or right of the sheet.
+    ///
+    /// # Parameters
+    /// - `total_cols`: the total number of columns in the sheet.
+    /// - `start_col`: the mutable column index to clamp in place.
+    ///
+    /// # Examples
+    ///i
+    /// ```rust
+    /// # use spreadsheet::cli_app::clamp_viewport_hz;
+    /// let mut c = 95;
+    /// clamp_viewport_hz(90, &mut c);
+    /// assert_eq!(c, 85);
+    /// ```
     pub fn clamp_viewport_hz(total_cols: i32, start_col: &mut i32) {
         if *start_col > total_cols {
             *start_col -= 10;
@@ -39,7 +97,16 @@ pub mod cli_app {
             *start_col = 0;
         }
     }
-
+    /// Process a single user command string, updating `sheet` and `status_msg`.
+    ///
+    /// Recognized commands:
+    /// - `w`, `a`, `s`, `d`: scroll viewport  
+    /// - `scroll_to <CELL>`: jump viewport  
+    /// - `disable_output` / `enable_output`  
+    /// - `clear_cache`  
+    /// - `undo` / `redo` (feature-gated)  
+    /// - `<CELL>=<EXPR>`: assign formula to a cell  
+    /// - `history <CELL>` (feature-gated)
     pub fn process_command(sheet: &mut Box<Spreadsheet>, cmd: &str, status_msg: &mut String) {
         if cmd == "w" {
             sheet.top_row -= 10;
@@ -129,12 +196,16 @@ pub mod cli_app {
         }
     }
 }
-
+/// The `gui_app` module implements a GUI front-end using `egui`
+/// and `eframe`. It provides a spreadsheet grid, formula bar,
+/// and charting capabilities. The GUI is built on top of the
+/// [`sheet`] and [`parser`] modules, allowing for interactive
+/// editing and visualization of spreadsheet data.
 #[cfg(feature = "gui_app")]
 pub mod gui_app {
     use crate::parser::*;
     use crate::sheet::*;
-
+    /// Convert a 0-indexed column number into its Excel-style letters
     // Implement GUI-related functions needed for testing
     pub fn col_to_letters(mut col: i32) -> String {
         if col < 0 {
@@ -152,7 +223,13 @@ pub mod gui_app {
         buf.reverse();
         buf.into_iter().collect()
     }
-
+    /// Turn (row, col) into `"A1"`, `"B3"`, etc.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// assert_eq!(gui_app::coords_to_cell_name(0, 0), "A1");
+    /// ```
     pub fn coords_to_cell_name(row: i32, col: i32) -> String {
         let mut n = col + 1;
         let mut col_str = String::new();
