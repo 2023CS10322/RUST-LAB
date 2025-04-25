@@ -8,7 +8,7 @@ TARGET = target/release/sheet
 ROWS ?= 10
 COLS ?= 10
 
-.PHONY: all clean test report ext1 ext2 docs
+.PHONY: all clean test report coverage ext1 ext2 docs
 # Default target: build the main executable in release mode.
 all: $(TARGET)
 
@@ -24,6 +24,8 @@ test:
 report:
 	@echo "Opening report.pdf…"
 	open report.pdf
+ coverage:
+	$(CARGO) tarpaulin --lib --ignore-tests
 
 # Extension 1: full‐featured TUI (history, undo, advanced formulas)
 ext1:
